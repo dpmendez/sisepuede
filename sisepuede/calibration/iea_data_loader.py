@@ -44,9 +44,9 @@ The repository contains two CSV layouts:
 Detection: if the first column header (stripped) == "Year" -> Format B.
 
 Unit handling:
-  TJ   -> pass through (×1)
-  GWh  -> ×3.6
-  ktoe -> ×41.868
+  TJ   -> pass through (x1)
+  GWh  -> x3.6
+  ktoe -> x41.868
 
 Exports sign convention:
   IEA stores exports as negative numbers. Values are returned as-is.
@@ -120,12 +120,12 @@ _ROW_LABEL_TO_PRODUCT_TFC: Dict[str, str] = {
 ##    balance_fixed  : iea_balance_code shared by every row (None if determined per-row)
 ##    product_fixed  : iea_product_code shared by every row (Format B only)
 ##    mode           : how to determine (balance, product) from each row:
-##                       "product_from_row"  — balance_fixed + row_label → product
-##                       "balance_from_row"  — row_label → balance AND product (TFC)
+##                       "product_from_row"  — balance_fixed + row_label -> product
+##                       "balance_from_row"  — row_label -> balance AND product (TFC)
 ##                       "imports_exports"   — row_label ("Imports"/"Exports") +
-##                                            balance_prefix → balance and product
+##                                            balance_prefix -> balance and product
 ##                       "fixed"            — both balance_fixed and product_fixed set (B)
-##    balance_prefix : prefix for imports_exports mode (e.g. "COAL" → COALIMPORTS)
+##    balance_prefix : prefix for imports_exports mode (e.g. "COAL" -> COALIMPORTS)
 _FOLDER_CONFIG: Dict[str, Dict] = {
     "total_energy_supply": {
         "format":         "A",
@@ -190,7 +190,7 @@ _FOLDER_CONFIG: Dict[str, Dict] = {
         "format":         "A",
         "balance_fixed":  None,
         "mode":           "imports_exports",
-        "balance_prefix": "",          # → IMPORTS / EXPORTS (no prefix)
+        "balance_prefix": "",          # -> IMPORTS / EXPORTS (no prefix)
     },
     # Production folders (coal_production, crude_oil_production,
     # natural_gas_production) are omitted here.  Each gives only domestic
@@ -216,7 +216,7 @@ class IEADataLoader:
     country, parses it (Format A or B), converts values to TJ, and returns
     a long DataFrame with columns:
 
-        iso_alpha_3, iea_balance_code, iea_product_code, year, value_tj
+        iso_alpha_3, iea_balance_code, iea_product_code, year, value_iea_tj
 
     This DataFrame can be passed directly to IEACrosswalk.build_comparison().
     """
@@ -247,7 +247,7 @@ class IEADataLoader:
         self.model_attributes = model_attributes
 
         self._initialize_regions()
-        seld._initialize_paths(path_data_dir, folders_to_skip)
+        self._initialize_paths(path_data_dir, folders_to_skip)
 
         return None
 
@@ -427,7 +427,7 @@ class IEADataLoader:
         """Parse a Format-A file (row-label, value, year, units).
 
         Returns a DataFrame with columns:
-            iea_balance_code, iea_product_code, year, value_tj
+            iea_balance_code, iea_product_code, year, value_iea_tj
 
         Function Arguments
         ------------------
@@ -442,7 +442,7 @@ class IEADataLoader:
             return pd.DataFrame()
         
         # Standardise column names
-        df.columns = ["row_label", "value", "year", "units"] + list(df.columbs[4:])
+        df.columns = ["row_label", "value", "year", "units"] + list(df.columns[4:])
 
         df["row_label"] = (
             df["row_label"]
@@ -495,7 +495,7 @@ class IEADataLoader:
                 "iea_balance_code":  balance_code,
                 "iea_product_code":  product_code,
                 "year":              int(row["year"]),
-                "value_tj":          value_tj,
+                "value_iea_tj":      value_tj,
             })
 
         if not rows:
@@ -511,7 +511,7 @@ class IEADataLoader:
         """Parse a Format-B file (year-leading, single metric column).
 
         Returns a DataFrame with columns:
-            iea_balance_code, iea_product_code, year, value_tj
+            iea_balance_code, iea_product_code, year, value_iea_tj
 
         Function Arguments
         ------------------
@@ -539,13 +539,13 @@ class IEADataLoader:
 
         df["iea_balance_code"] = balance_code
         df["iea_product_code"] = product_code
-        df["value_tj"] = df.apply(
+        df["value_iea_tj"] = df.apply(
             lambda r: self._unit_to_tj(r["value"], r["units"]),
             axis = 1,
         )
         df["year"] = df["year"].astype(int)
 
-        return df[["iea_balance_code", "iea_product_code", "year", "value_tj"]]
+        return df[["iea_balance_code", "iea_product_code", "year", "value_iea_tj"]]
 
 
     ##################################
@@ -621,7 +621,7 @@ class IEADataLoader:
         if not frames:
             return pd.DataFrame(columns = [
                 "iso_alpha_3", "iea_balance_code",
-                "iea_product_code", "year", "value_tj",
+                "iea_product_code", "year", "value_iea_tj", "source_folder",
             ])
 
         df_all = pd.concat(frames, ignore_index = True)
