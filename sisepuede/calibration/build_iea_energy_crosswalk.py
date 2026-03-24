@@ -301,10 +301,10 @@ class IEACrosswalkBuilder:
             ),
             (
                 "OIL",      "Oil",
-                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene"],
+                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene", "fuel_hydrocarbon"],
                 "sum", "approximate",
-                "IEA Oil includes crude and NGL; SISEPUEDE fuel_crude is "
-                "the closest analog",
+                "IEA Oil includes crude and NGL; SISEPUEDE fuel_crude is the closest analog. "
+                "HGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES",
             ),
             (
                 "NUCLEAR",  "Nuclear",
@@ -340,6 +340,17 @@ class IEACrosswalkBuilder:
                 "ELECT",  "Electricity",
                 ["fuel_electricity"],
                 "direct", "exact", "",
+            ),
+            (
+                "HYDROGEN",  "Hydrogen",
+                ["fuel_hydrogen"],
+                "direct", "no_match", "IEA free-access TES has no hydrogen row; "
+                "tracked only in premium datasets post-2022",
+            ),
+            (
+                "AMMONIA",  "Ammonia",
+                ["fuel_ammonia"],
+                "direct", "no_match", "Ammonia not tracked as energy carrier in IEA free-access TES data",
             ),
         ]:
             rows.append(self._row(
