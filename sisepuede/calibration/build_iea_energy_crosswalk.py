@@ -296,13 +296,13 @@ class IEACrosswalkBuilder:
             ),
             (
                 "NATGAS",   "Natural gas",
-                ["fuel_natural_gas"],
+                ["fuel_natural_gas", "natural_gas_liquid"],
                 "direct", "exact", "",
             ),
             (
                 "OIL",      "Oil",
-                ["fuel_crude"],
-                "direct", "approximate",
+                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene"],
+                "sum", "approximate",
                 "IEA Oil includes crude and NGL; SISEPUEDE fuel_crude is "
                 "the closest analog",
             ),
@@ -334,6 +334,11 @@ class IEACrosswalkBuilder:
             (
                 "GEOTHERM",  "Geothermal",
                 ["fuel_geothermal"],
+                "direct", "exact", "",
+            ),
+            (
+                "ELECT",  "Electricity",
+                ["fuel_electricity"],
                 "direct", "exact", "",
             ),
         ]:
@@ -522,7 +527,7 @@ class IEACrosswalkBuilder:
             "TOTAL", "Total",
             "entc",
             self._fields_for(entc_var),
-            "sum", "PJ", 1000, "exact",
+            "sum", "PJ", 1000, "approximate",
             "Sum all power plant technologies",
         ))
 
@@ -653,6 +658,8 @@ class IEACrosswalkBuilder:
             rows.append(self._note_row(line))
         rows.append({k: None for k in _COLS})
 
+        # # sum all industrial sources in IEA and equal to energy_consumption_inen_{...s}
+        # inen_var  = "Energy Consumption from Industrial Energy"
         inen_var  = "Energy Demand by Fuel in Industrial Energy"
         note_base = "No per-fuel consumption output in INEN; using ENFU demand output"
 
@@ -745,6 +752,8 @@ class IEACrosswalkBuilder:
             rows.append(self._note_row(line))
         rows.append({k: None for k in _COLS})
 
+        # # sum all residential sources in IEA and equal to energy_consumption_scoe_residential
+        # scoe_var  = "Energy Consumption from SCOE" 
         scoe_var  = "Energy Demand by Fuel in SCOE"
         note_scoe = (
             "No per-fuel consumption output in SCOE; ENFU demand aggregates "
@@ -802,6 +811,8 @@ class IEACrosswalkBuilder:
             rows.append(self._note_row(line))
         rows.append({k: None for k in _COLS})
 
+        # # sum all commercial sources in IEA and equal to energy_consumption_scoe_commercial_municipal
+        # scoe_var  = "Energy Consumption from SCOE" 
         scoe_var  = "Energy Demand by Fuel in SCOE"
         note_comm = (
             "No per-fuel consumption output in SCOE; same scoe-wide ENFU "
