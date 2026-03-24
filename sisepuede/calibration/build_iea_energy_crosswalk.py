@@ -396,29 +396,41 @@ class IEACrosswalkBuilder:
 
         ##  PER-FUEL IMPORTS AND EXPORTS
 
-        for balance_prefix, balance_name, imp_cats, exp_cats, exp_notes in [
+        for balance_prefix, balance_name, imp_cats, exp_cats, aggregation, quality, imp_notes, exp_notes in [
             (
-                "COAL",  "Coal imports and exports",
+                "COAL", "Coal imports and exports",
                 ["fuel_coal"],
                 ["fuel_coal"],
+                "direct", "exact",
+                "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
-                "OIL",   "Crude oil imports and exports",
-                ["fuel_crude"],
-                ["fuel_crude"],
-                "exportsadj tracks surplus supply; may undercount scheduled exports",
+                "OIL", "Crude oil imports and exports",
+                ["fuel_crude", "fuel_diesel", "fuel_gasoline",
+                "fuel_hydrocarbon_gas_liquids", "fuel_kerosene",
+                "fuel_oil", "fuel_natural_gas_liquid"],
+                ["fuel_crude", "fuel_diesel", "fuel_gasoline",
+                "fuel_hydrocarbon_gas_liquids", "fuel_kerosene",
+                "fuel_oil", "fuel_natural_gas_liquid"],
+                "sum", "approximate",
+                "IEA Oil imports = crude + all refined products + NGLs; sum across SISEPUEDE liquid petroleum fuels",
+                "exportsadj tracks surplus supply; may undercount scheduled exports; sum across liquid petroleum fuels",
             ),
             (
-                "GAS",   "Natural gas imports and exports",
+                "GAS", "Natural gas imports and exports",
                 ["fuel_natural_gas"],
                 ["fuel_natural_gas"],
+                "direct", "exact",
+                "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
-                "EL",    "Electricity imports and exports",
+                "EL", "Electricity imports and exports",
                 ["fuel_electricity"],
                 ["fuel_electricity"],
+                "direct", "exact",
+                "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
         ]:
@@ -427,15 +439,16 @@ class IEACrosswalkBuilder:
                 "IMPORTS", "Imports",
                 "enfu",
                 self._fields_for(imp_var, imp_cats),
-                "direct", "PJ", 1000, "exact", "",
+                aggregation, "PJ", 1000, quality, imp_notes,
             ))
             rows.append(self._row(
                 f"{balance_prefix}EXPORTS", balance_name,
                 "EXPORTS", "Exports",
                 "enfu",
                 self._fields_for(exp_var, exp_cats),
-                "direct", "PJ", 1000, "approximate", exp_notes,
+                aggregation, "PJ", 1000, quality, exp_notes,
             ))
+
 
         return rows
 
