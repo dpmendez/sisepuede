@@ -1,6 +1,7 @@
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 from matplotlib.pyplot import Figure
 from matplotlib.axes import Axes
 from typing import *
@@ -248,7 +249,6 @@ def plot_stack(
     
     return fig, ax
     
-           
 
 ##########################################
 ###                                    ###
@@ -256,73 +256,129 @@ def plot_stack(
 ###                                    ###
 ##########################################
 
-def plot_detailed_comparison(
+# # TO DO:
+# # * Generalize functions to be dataframe agnostic
+
+def _plot_detailed_single(
     df_pair: pd.DataFrame,
+    ax1, ax2, ax3,
     second_var: str,
     third_var: str,
     second_label: str,
     third_label: str,
-    country: str = "",
-) -> None:
-    """
-    Plot a detailed comparison for a single pair with three vertically stacked subplots.
-    
-    Top subplot (larger): IEA vs SISEPUEDE values.
-    Middle subplot: Second variable (e.g., ratio or difference).
-    Bottom subplot: Third variable (e.g., percentage difference).
-    
-    Calculates additional columns if needed (difference_sisepuede_iea, perc_difference_sisepuede).
-    """
+):
     df = df_pair.copy()
     
-    # Calculate additional columns if not present
     if 'difference_sisepuede_iea' not in df.columns:
         df['difference_sisepuede_iea'] = df['value_sisepuede_tj'] - df['value_iea_tj']
     
     if 'perc_difference_sisepuede' not in df.columns:
         df['perc_difference_sisepuede'] = (
             (df['value_sisepuede_tj'] - df['value_iea_tj']) / df['value_iea_tj'] * 100
-        ).fillna(0)  # Avoid NaN in division
-    
-    # Create subplots with shared x-axis and height ratios
-    fig, (ax1, ax2, ax3) = plt.subplots(
-        3, 1, sharex=True, figsize=(8, 10), gridspec_kw={'height_ratios': [2, 1, 1]}
-    )
-    
-    # Top plot: IEA vs SISEPUEDE values
-    ax1.plot(df['year'], df['value_iea_tj'],
-             marker='o', label='IEA (observed)', color='steelblue')
-    ax1.plot(df['year'], df['value_sisepuede_tj'],
-             marker='s', linestyle='--', label='SISEPUEDE', color='tomato')
+        ).fillna(0)
+
+    ax1.plot(df['year'], df['value_iea_tj'], marker='o', label='IEA (observed)', color='steelblue')
+    ax1.plot(df['year'], df['value_sisepuede_tj'], marker='s', linestyle='--', label='SISEPUEDE', color='tomato')
     ax1.set_ylabel('TJ')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
-    
-    # Middle plot: Second variable
+
     ax2.plot(df['year'], df[second_var], color='green', marker='x')
     ax2.set_ylabel(second_label)
     ax2.grid(True, alpha=0.3)
-    
-    # Bottom plot: Third variable
+
     ax3.plot(df['year'], df[third_var], color='purple', marker='^')
     ax3.set_ylabel(third_label)
     ax3.set_xlabel('Year')
     ax3.grid(True, alpha=0.3)
-    
-    # Title with pair info
-    balance_code = df['iea_balance_code'].iloc[0]
-    balance_name = df['iea_balance_name'].iloc[0]
-    product_code = df['iea_product_code'].iloc[0]
-    product_name = df['iea_product_name'].iloc[0]
-    subsector = df['sisepuede_subsector'].iloc[0] if 'sisepuede_subsector' in df.columns else 'Unknown'
-    
-    title = f"{balance_code} ({balance_name}) × {product_code} ({product_name}) - {subsector}"
-    ax1.set_title(title, fontsize=10)
-    fig.suptitle(f"Detailed Comparison — {country}", fontsize=12, y=0.98)
-    
-    plt.tight_layout()
-    plt.show()
 
+
+def plot_detailed_comparisons(
+    df_comparison: pd.DataFrame,
+    pairs: Union[Tuple[str, str], List[Tuple[str, str]]] = None,
+    second_var: str = 'ratio_sisepuede_over_iea',
+    third_var: str = 'perc_difference_sisepuede',
+    second_label: str = 'Ratio SSP/IEA',
+    third_label: str = 'Perc Diff SSP (%)',
+    country: str = '',
+    max_pairs: int = 12,
+) -> None:
+    """
+    Plot detailed comparison for one or more (iea_balance, iea_product) pairs.
+
+    - If `pairs` is a tuple, it is treated as a single entity.
+    - If `pairs` is a list, each pair draws one 3-subplot figure.
+    - If `pairs` is None, the function will infer pair(s) from `df_comparison`.
+    """
+    if pairs is None:
+        unique_pairs = df_comparison[['iea_balance_code', 'iea_product_code']].drop_duplicates()
+        if len(unique_pairs) != 1:
+            raise ValueError('pairs must be provided when df_comparison includes multiple balance/product combinations')
+        pairs = [tuple(unique_pairs.iloc[0])]
+
+    if isinstance(pairs, tuple) and len(pairs) == 2 and not isinstance(pairs[0], (list, tuple)):
+        pairs = [pairs]
+
+    if not isinstance(pairs, list):
+        raise ValueError('pairs must be a tuple or a list of tuples')
+
+    selected_pairs = []
+    for balance_id, product_id in pairs[:max_pairs]:
+        mask_balance = (df_comparison['iea_balance_code'] == balance_id) | (df_comparison['iea_balance_name'] == balance_id)
+        mask_product = (df_comparison['iea_product_code'] == product_id) | (df_comparison['iea_product_name'] == product_id)
+        df_pair = df_comparison[mask_balance & mask_product].sort_values('year')
+
+        if df_pair.empty:
+            print(f'No data found for pair: {balance_id}, {product_id}')
+            continue
+
+        balance_code = df_pair['iea_balance_code'].iloc[0]
+        balance_name = df_pair['iea_balance_name'].iloc[0]
+        product_code = df_pair['iea_product_code'].iloc[0]
+        product_name = df_pair['iea_product_name'].iloc[0]
+        subsector = df_pair['sisepuede_subsector'].iloc[0] if 'sisepuede_subsector' in df_pair.columns else 'Unknown'
+
+        selected_pairs.append({
+            'data': df_pair,
+            'balance_code': balance_code,
+            'balance_name': balance_name,
+            'product_code': product_code,
+            'product_name': product_name,
+            'subsector': subsector,
+        })
+
+    if not selected_pairs:
+        print("No valid pairs to plot.")
+        return
+
+    if len(selected_pairs) == 1:
+        # Single pair: 3 subplots in one figure
+        pair = selected_pairs[0]
+        fig, (ax1, ax2, ax3) = plt.subplots(
+            3, 1, sharex=True, figsize=(8, 10), gridspec_kw={'height_ratios': [2, 1, 1]}
+        )
+        _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
+        title = f"{pair['balance_code']} ({pair['balance_name']}) × {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+        ax1.set_title(title, fontsize=10)
+        fig.suptitle(f"Detailed Comparison — {country}", fontsize=12, y=0.98)
+        plt.tight_layout()
+        plt.show()
+    else:
+        # Multiple pairs: 3 rows (stacked plots per pair), columns for pairs
+        nrows = 3
+        ncols = len(selected_pairs)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 8), sharex='col', squeeze=False)
+        
+        for i, pair in enumerate(selected_pairs):
+            ax1, ax2, ax3 = axes[0, i], axes[1, i], axes[2, i]
+            _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
+            # Title on the top axis for each pair
+            title = f"{pair['balance_code']} ({pair['balance_name']}) × {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+            ax1.set_title(title, fontsize=9)
+        
+        fig.suptitle(f"Detailed Comparisons — {country}", fontsize=12, y=0.98)
+        plt.tight_layout()
+        plt.show()
 
 
 def plot_selected_comparisons(
@@ -426,6 +482,3 @@ def plot_selected_comparisons(
         plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
         plt.tight_layout()
         plt.show()
-
-
-
