@@ -272,9 +272,9 @@ def _plot_detailed_single(
     if 'difference_sisepuede_iea' not in df.columns:
         df['difference_sisepuede_iea'] = df['value_sisepuede_tj'] - df['value_iea_tj']
     
-    if 'perc_difference_sisepuede' not in df.columns:
-        df['perc_difference_sisepuede'] = (
-            (df['value_sisepuede_tj'] - df['value_iea_tj']) / df['value_iea_tj'] * 100
+    if 'rel_error_iea' not in df.columns:
+        df['rel_error_iea'] = (
+            (df['value_sisepuede_tj'] - df['value_iea_tj']) / df['value_iea_tj']
         ).fillna(0)
 
     ax1.plot(df['year'], df['value_iea_tj'], marker='o', label='IEA (observed)', color='steelblue')
@@ -297,9 +297,9 @@ def plot_detailed_comparisons(
     df_comparison: pd.DataFrame,
     pairs: Union[Tuple[str, str], List[Tuple[str, str]]] = None,
     second_var: str = 'ratio_sisepuede_over_iea',
-    third_var: str = 'perc_difference_sisepuede',
+    third_var: str = 'rel_error_iea',
     second_label: str = 'Ratio SSP/IEA',
-    third_label: str = 'Perc Diff SSP (%)',
+    third_label: str = 'Relative Error IEA',
     country: str = '',
     max_pairs: int = 12,
 ) -> None:
@@ -358,7 +358,7 @@ def plot_detailed_comparisons(
             3, 1, sharex=True, figsize=(8, 10), gridspec_kw={'height_ratios': [2, 1, 1]}
         )
         _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
-        title = f"{pair['balance_code']} ({pair['balance_name']}) × {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+        title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
         ax1.set_title(title, fontsize=10)
         fig.suptitle(f"Detailed Comparison — {country}", fontsize=12, y=0.98)
         plt.tight_layout()
@@ -373,7 +373,7 @@ def plot_detailed_comparisons(
             ax1, ax2, ax3 = axes[0, i], axes[1, i], axes[2, i]
             _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
             # Title on the top axis for each pair
-            title = f"{pair['balance_code']} ({pair['balance_name']}) × {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+            title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
             ax1.set_title(title, fontsize=9)
         
         fig.suptitle(f"Detailed Comparisons — {country}", fontsize=12, y=0.98)
@@ -442,7 +442,7 @@ def plot_selected_comparisons(
         ax.plot(pair["data"]["year"], pair["data"]["value_sisepuede_tj"],
                 marker="s", linestyle="--", label="SISEPUEDE", color="tomato")
         
-        title = (f"{pair['balance_code']} ({pair['balance_name']}) × "
+        title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
                  f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
         ax.set_title(title, fontsize=10)
         ax.set_xlabel("Year")
@@ -468,7 +468,7 @@ def plot_selected_comparisons(
             ax.plot(pair["data"]["year"], pair["data"]["value_sisepuede_tj"],
                     marker="s", linestyle="--", label="SISEPUEDE", color="tomato")
             
-            title = (f"{pair['balance_code']} ({pair['balance_name']}) × "
+            title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
                      f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
             ax.set_title(title, fontsize=9)
             ax.set_xlabel("Year")
@@ -518,11 +518,11 @@ def plot_metric_bar(
     elif metric == 'ratio':
         df_both['metric_value'] = df_both['value_sisepuede_tj'] / df_both['value_iea_tj']
         ylabel = 'Ratio (SSP / IEA)'
-    elif metric == 'percentage':
+    elif metric == 'error':
         df_both['metric_value'] = ((df_both['value_sisepuede_tj'] - df_both['value_iea_tj']) / df_both['value_iea_tj']) * 100
-        ylabel = 'Percentage Difference (%)'
+        ylabel = 'Relative Error (%)'
     else:
-        raise ValueError("Metric must be 'difference', 'ratio', or 'percentage'")
+        raise ValueError("Metric must be 'difference', 'ratio', or 'error'")
     
     # Create labels for the bars, including mapping quality when available
     if 'mapping_quality' in df_both.columns:

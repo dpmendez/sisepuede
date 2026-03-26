@@ -442,10 +442,10 @@ class IEACrosswalk:
             df["value_sisepuede_tj"] / df["value_iea_tj"]
         )
         
-        df["difference_sisepuede_iea"] = df["value_sisepuede_tj"] - df["value_iea_tj"]
-        df["perc_difference_sisepuede"] = (df["value_sisepuede_tj"] - df["value_iea_tj"]) / df["value_sisepuede_tj"]
-        df["perc_difference_iea"] = (df["value_iea_tj"] - df["value_sisepuede_tj"]) / df["value_iea_tj"]
-
+        df["diff_sisepuede_iea"] = df["value_sisepuede_tj"] - df["value_iea_tj"]
+        df["rel_err_sisepuede"]  = (df["value_sisepuede_tj"] - df["value_iea_tj"]) / df["value_sisepuede_tj"]
+        df["rel_err_iea"]        = (df["value_iea_tj"] - df["value_sisepuede_tj"]) / df["value_iea_tj"]
+        
         return df.sort_values(join_keys).reset_index(drop = True)
     
 
@@ -477,7 +477,7 @@ class IEACrosswalk:
             .agg(
                 n_years_matched   = ("ratio_sisepuede_over_iea", "count"),
                 mean_ratio        = ("ratio_sisepuede_over_iea", "mean"),
-                mean_difference   = ("difference_sisepuede_iea", "mean"),
+                mean_rel_err_iea  = ("rel_err_iea",              "mean"),
                 mean_iea_tj       = ("value_iea_tj",             "mean"),
                 mean_sisepuede_tj = ("value_sisepuede_tj",       "mean"),
             )
