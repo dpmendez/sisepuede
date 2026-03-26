@@ -524,8 +524,15 @@ def plot_metric_bar(
     else:
         raise ValueError("Metric must be 'difference', 'ratio', or 'percentage'")
     
-    # Create labels for the bars
-    df_both['label'] = df_both['iea_balance_code'] + ' - ' + df_both['iea_product_code']
+    # Create labels for the bars, including mapping quality when available
+    if 'mapping_quality' in df_both.columns:
+        df_both['mapping_quality'] = df_both['mapping_quality'].fillna('Unknown')
+        df_both['label'] = (
+            df_both['iea_balance_code'] + ' - ' + df_both['iea_product_code']
+            + ' (' + df_both['mapping_quality'].astype(str) + ')'
+        )
+    else:
+        df_both['label'] = df_both['iea_balance_code'] + ' - ' + df_both['iea_product_code']
     
     # Plot
     fig, ax = plt.subplots(figsize=(12, 8))
