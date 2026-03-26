@@ -482,3 +482,74 @@ def plot_selected_comparisons(
         plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
         plt.tight_layout()
         plt.show()
+
+
+def plot_metric_bar(
+    df_comparison: pd.DataFrame,
+    year: int,
+    metric: str = 'difference',
+    orientation: str = 'vertical',
+) -> None:
+    """
+    Create a bar plot showing a metric derived from the difference between SSP and IEA values
+    for a specific year, only for (balance, product) pairs that exist in both datasets.
+
+    Parameters:
+    - df_comparison: DataFrame with comparison data, including 'year', 'value_sisepuede_tj', 'value_iea_tj',
+                     'iea_balance_code', 'iea_product_code', etc.
+    - year: The year to filter data for.
+    - metric: The metric to compute ('difference', 'ratio', 'percentage').
+    - orientation: 'vertical' or 'horizontal' for the bar plot.
+    """
+    # Filter for the specified year
+    df_year = df_comparison[df_comparison['year'] == year].copy()
+    
+    # Filter for pairs with both SSP and IEA values
+    df_both = df_year.dropna(subset=['value_sisepuede_tj', 'value_iea_tj'])
+    
+    if df_both.empty:
+        print(f"No data for year {year} with both SSP and IEA values.")
+        return
+    
+    # Compute the metric
+    if metric == 'difference':
+        df_both['metric_value'] = df_both['value_sisepuede_tj'] - df_both['value_iea_tj']
+        ylabel = 'Difference (SSP - IEA) [TJ]'
+    elif metric == 'ratio':
+        df_both['metric_value'] = df_both['value_sisepuede_tj'] / df_both['value_iea_tj']
+        ylabel = 'Ratio (SSP / IEA)'
+    elif metric == 'percentage':
+        df_both['metric_value'] = ((df_both['value_sisepuede_tj'] - df_both['value_iea_tj']) / df_both['value_iea_tj']) * 100
+        ylabel = 'Percentage Difference (%)'
+    else:
+        raise ValueError("Metric must be 'difference', 'ratio', or 'percentage'")
+    
+    # Create labels for the bars
+    df_both['label'] = df_both['iea_balance_code'] + ' - ' + df_both['iea_product_code']
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    if orientation == 'vertical':
+        bars = ax.bar(range(len(df_both)), df_both['metric_value'], tick_label=df_both['label'])
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel('Balance - Product Pair')
+        plt.xticks(rotation=45, ha='right')
+    else:
+        bars = ax.barh(range(len(df_both)), df_both['metric_value'], tick_label=df_both['label'])
+        ax.set_xlabel(ylabel)
+        ax.set_ylabel('Balance - Product Pair')
+    
+    ax.set_title(f'{metric.capitalize()} between SSP and IEA for {year}')
+    
+    # Add value labels on the bars
+    for bar in bars:
+        if orientation == 'vertical':
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height, f'{height:.2f}', ha='center', va='bottom')
+        else:
+            width = bar.get_width()
+            ax.text(width, bar.get_y() + bar.get_height()/2, f'{width:.2f}', ha='left', va='center')
+    
+    plt.tight_layout()
+    plt.show()
