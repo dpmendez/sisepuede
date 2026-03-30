@@ -1,0 +1,128 @@
+iea_balance_code,iea_balance_name,iea_product_code,iea_product_name,sisepuede_subsector,sisepuede_output_variables,aggregation,unit_sisepuede,unit_conversion_to_tj,mapping_quality,notes
+,,,,,,,,,,
+,--- ENERGY SUPPLY ---,,,,,,,,,
+,,,,,,,,,,
+INDPROD,Total energy supply,COAL,Coal,enfu,prod_enfu_fuel_coal_pj,direct,PJ,1000.0,approximate,IEA TES Coal aggregate; SISEPUEDE fuel_coal does not distinguish hard vs. brown coal
+INDPROD,Total energy supply,NATGAS,Natural gas,enfu,prod_enfu_fuel_natural_gas_pj,direct,PJ,1000.0,exact,
+INDPROD,Total energy supply,OIL,Oil,enfu,prod_enfu_fuel_crude_pj:prod_enfu_fuel_diesel_pj:prod_enfu_fuel_gasoline_pj:prod_enfu_fuel_kerosene_pj:prod_enfu_fuel_oil_pj,sum,PJ,1000.0,approximate,"IEA Oil includes crude and NGL; SISEPUEDE fuel_crude is the closest analog. HGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES"
+INDPROD,Total energy supply,NUCLEAR,Nuclear,enfu,,direct,PJ,1000.0,exact,
+INDPROD,Total energy supply,HYDRO,Hydro,enfu,,direct,PJ,1000.0,exact,SISEPUEDE fuel_water maps to hydro
+INDPROD,Total energy supply,WINDSOLAR,Wind solar etc.,enfu,,sum,PJ,1000.0,approximate,IEA aggregates wind+solar+other renewables; sum SISEPUEDE wind and solar
+INDPROD,Total energy supply,BIOWASTE,Biofuels and waste,enfu,,sum,PJ,1000.0,approximate,IEA aggregates all biofuels and waste; sum SISEPUEDE biomass+biogas+biofuels+waste
+INDPROD,Total energy supply,GEOTHERM,Geothermal,enfu,,direct,PJ,1000.0,exact,
+INDPROD,Total energy supply,ELECT,Electricity,enfu,prod_enfu_fuel_electricity_pj,direct,PJ,1000.0,exact,
+INDPROD,Total energy supply,HYDROGEN,Hydrogen,enfu,prod_enfu_fuel_hydrogen_pj,direct,PJ,1000.0,no_match,IEA free-access TES has no hydrogen row; tracked only in premium datasets post-2022
+INDPROD,Total energy supply,AMMONIA,Ammonia,enfu,prod_enfu_fuel_ammonia_pj,direct,PJ,1000.0,no_match,Ammonia not tracked as energy carrier in IEA free-access TES data
+,,,,,,,,,,
+,--- IMPORTS AND EXPORTS ---,,,,,,,,,
+,,,,,,,,,,
+IMPORTS,Energy imports and exports,IMPORTS,Imports,enfu,imports_enfu_fuel_ammonia_pj:imports_enfu_fuel_coal_pj:imports_enfu_fuel_crude_pj:imports_enfu_fuel_diesel_pj:imports_enfu_fuel_electricity_pj:imports_enfu_fuel_gasoline_pj:imports_enfu_fuel_hydrocarbon_gas_liquids_pj:imports_enfu_fuel_hydrogen_pj:imports_enfu_fuel_kerosene_pj:imports_enfu_fuel_natural_gas_pj:imports_enfu_fuel_natural_gas_liquid_pj:imports_enfu_fuel_oil_pj,sum,PJ,1000.0,approximate,Total energy imports; sum across all SISEPUEDE fuel imports
+EXPORTS,Energy imports and exports,EXPORTS,Exports,enfu,exportsadj_enfu_fuel_ammonia:exportsadj_enfu_fuel_coal:exportsadj_enfu_fuel_crude:exportsadj_enfu_fuel_diesel:exportsadj_enfu_fuel_electricity:exportsadj_enfu_fuel_gasoline:exportsadj_enfu_fuel_hydrocarbon_gas_liquids:exportsadj_enfu_fuel_hydrogen:exportsadj_enfu_fuel_kerosene:exportsadj_enfu_fuel_natural_gas:exportsadj_enfu_fuel_natural_gas_liquid:exportsadj_enfu_fuel_oil,sum,PJ,1000.0,approximate,Total energy exports; sum across tracked SISEPUEDE fuel exports
+COALIMPORTS,Coal imports and exports,IMPORTS,Imports,enfu,imports_enfu_fuel_coal_pj,direct,PJ,1000.0,exact,
+COALEXPORTS,Coal imports and exports,EXPORTS,Exports,enfu,exportsadj_enfu_fuel_coal,direct,PJ,1000.0,exact,exportsadj tracks surplus supply; may undercount scheduled exports
+OILIMPORTS,Crude oil imports and exports,IMPORTS,Imports,enfu,imports_enfu_fuel_crude_pj:imports_enfu_fuel_diesel_pj:imports_enfu_fuel_gasoline_pj:imports_enfu_fuel_hydrocarbon_gas_liquids_pj:imports_enfu_fuel_kerosene_pj:imports_enfu_fuel_natural_gas_liquid_pj:imports_enfu_fuel_oil_pj,sum,PJ,1000.0,approximate,IEA Oil imports = crude + all refined products + NGLs; sum across SISEPUEDE liquid petroleum fuels
+OILEXPORTS,Crude oil imports and exports,EXPORTS,Exports,enfu,exportsadj_enfu_fuel_crude:exportsadj_enfu_fuel_diesel:exportsadj_enfu_fuel_gasoline:exportsadj_enfu_fuel_hydrocarbon_gas_liquids:exportsadj_enfu_fuel_kerosene:exportsadj_enfu_fuel_natural_gas_liquid:exportsadj_enfu_fuel_oil,sum,PJ,1000.0,approximate,exportsadj tracks surplus supply; may undercount scheduled exports; sum across liquid petroleum fuels
+GASIMPORTS,Natural gas imports and exports,IMPORTS,Imports,enfu,imports_enfu_fuel_natural_gas_pj,direct,PJ,1000.0,exact,
+GASEXPORTS,Natural gas imports and exports,EXPORTS,Exports,enfu,exportsadj_enfu_fuel_natural_gas,direct,PJ,1000.0,exact,exportsadj tracks surplus supply; may undercount scheduled exports
+ELIMPORTS,Electricity imports and exports,IMPORTS,Imports,enfu,imports_enfu_fuel_electricity_pj,direct,PJ,1000.0,exact,
+ELEXPORTS,Electricity imports and exports,EXPORTS,Exports,enfu,exportsadj_enfu_fuel_electricity,direct,PJ,1000.0,exact,exportsadj tracks surplus supply; may undercount scheduled exports
+,,,,,,,,,,
+,--- ELECTRICITY GENERATION BY SOURCE ---,,,,,,,,,
+,,,,,,,,,,
+,-- IEA unit is GWh; SISEPUEDE is PJ. Conversion in prepare_iea: 1 GWh = 0.0036 PJ (or 3.6 TJ) --,,,,,,,,,
+,,,,,,,,,,
+ELECTOUT,Electricity generation sources,COAL,Coal,entc,nemomod_entc_annual_production_by_technology_pp_coal:nemomod_entc_annual_production_by_technology_pp_coal_ccs,sum,PJ,1000.0,exact,IEA unit GWh; conversion handled in prepare_iea
+ELECTOUT,Electricity generation sources,OIL,Oil,entc,nemomod_entc_annual_production_by_technology_pp_oil,direct,PJ,1000.0,approximate,
+ELECTOUT,Electricity generation sources,NATGAS,Natural gas,entc,nemomod_entc_annual_production_by_technology_pp_gas:nemomod_entc_annual_production_by_technology_pp_gas_ccs,sum,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,NUCLEAR,Nuclear,entc,nemomod_entc_annual_production_by_technology_pp_nuclear,direct,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,HYDRO,Hydro,entc,nemomod_entc_annual_production_by_technology_pp_hydropower,direct,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,WIND,Wind,entc,nemomod_entc_annual_production_by_technology_pp_wind,direct,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,SOLARPV,Solar PV,entc,nemomod_entc_annual_production_by_technology_pp_solar,direct,PJ,1000.0,approximate,pp_solar covers both PV and thermal; sum IEA Solar PV + Solar thermal for best comparison
+ELECTOUT,Electricity generation sources,SOLARTH,Solar thermal,entc,nemomod_entc_annual_production_by_technology_pp_solar,direct,PJ,1000.0,approximate,mapped to same pp_solar as Solar PV; do not double-count
+ELECTOUT,Electricity generation sources,BIOFUEL,Biofuels,entc,nemomod_entc_annual_production_by_technology_pp_biogas:nemomod_entc_annual_production_by_technology_pp_biomass,sum,PJ,1000.0,approximate,
+ELECTOUT,Electricity generation sources,WASTE,Waste,entc,nemomod_entc_annual_production_by_technology_pp_waste_incineration,direct,PJ,1000.0,approximate,
+ELECTOUT,Electricity generation sources,GEOTHERM,Geothermal,entc,nemomod_entc_annual_production_by_technology_pp_geothermal,direct,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,TIDE,Tide,entc,nemomod_entc_annual_production_by_technology_pp_ocean,direct,PJ,1000.0,exact,
+ELECTOUT,Electricity generation sources,TOTAL,Total,entc,nemomod_entc_annual_production_by_technology_pp_biogas:nemomod_entc_annual_production_by_technology_pp_biomass:nemomod_entc_annual_production_by_technology_pp_coal:nemomod_entc_annual_production_by_technology_pp_coal_ccs:nemomod_entc_annual_production_by_technology_pp_gas:nemomod_entc_annual_production_by_technology_pp_gas_ccs:nemomod_entc_annual_production_by_technology_pp_geothermal:nemomod_entc_annual_production_by_technology_pp_hydropower:nemomod_entc_annual_production_by_technology_pp_nuclear:nemomod_entc_annual_production_by_technology_pp_ocean:nemomod_entc_annual_production_by_technology_pp_oil:nemomod_entc_annual_production_by_technology_pp_solar:nemomod_entc_annual_production_by_technology_pp_waste_incineration:nemomod_entc_annual_production_by_technology_pp_wind:nemomod_entc_annual_production_by_technology_st_batteries:nemomod_entc_annual_production_by_technology_st_compressed_air:nemomod_entc_annual_production_by_technology_st_flywheels:nemomod_entc_annual_production_by_technology_st_pumped_hydro,sum,PJ,1000.0,approximate,Sum all power plant technologies
+LOSSES,Electricity generation sources,LOSSES,Losses,enfu,energylost_enfu_transmission_loss_fuel_electricity_pj,direct,PJ,1000.0,exact,SISEPUEDE explicitly tracks T&D losses
+,,,,,,,,,,
+,--- TOTAL FINAL ENERGY CONSUMPTION BY SECTOR (all fuels) ---,,,,,,,,,
+,,,,,,,,,,
+,-- Uses energy_consumption_* variables (point-of-use consumption) --,,,,,,,,,
+,,,,,,,,,,
+TFC,Total final energy consumption,TOTAL,Total,multi,energy_consumption_inen_total:energy_consumption_scoe_total:energy_consumption_trns_total:energy_consumption_ccsq_total,sum,PJ,1000.0,approximate,SISEPUEDE TFC excludes non-energy use and transformation sector own-use; slight undercount expected
+INDUSTRY,Total final energy consumption,INDUSTRY,Industry,inen,energy_consumption_inen_total,direct,PJ,1000.0,approximate,Consumption variable (point-of-use); IEA Industry includes some agriculture-adjacent manufacturing
+TRANSPORT,Total final energy consumption,TRANSPORT,Transport,trns,energy_consumption_trns_total,direct,PJ,1000.0,exact,Consumption variable (point-of-use)
+RESIDENT,Total final energy consumption,RESIDENTIAL,Residential,scoe,energy_consumption_scoe_residential,direct,PJ,1000.0,exact,Consumption variable (point-of-use)
+COMMPUB,Total final energy consumption,COMMPUB,Commercial and public services,scoe,energy_consumption_scoe_commercial_municipal,direct,PJ,1000.0,exact,Consumption variable (point-of-use)
+AGRICULT,Total final energy consumption,AGRICULT,Agriculture / forestry,scoe,energy_consumption_scoe_other_se,direct,PJ,1000.0,partial,SISEPUEDE other_se is a residual; partial match only
+,,,,,,,,,,
+,--- INDUSTRY TOTAL FINAL CONSUMPTION BY SOURCE ---,,,,,,,,,
+,,,,,,,,,,
+,-- IEA provides consumption by fuel. SISEPUEDE INEN outputs consumption by sub-industry --,,,,,,,,,
+,-- (energy_consumption_inen_$CAT-INDUSTRY$) and a total (energy_consumption_inen_total) --,,,,,,,,,
+,-- but NOT by fuel. The only per-fuel breakdown is energy_demand_enfu_subsector_total_pj_inen_$CAT-FUEL$ --,,,,,,,,,
+,"-- (fuel demanded by INEN from the ENFU subsector, recorded as a model output). --",,,,,,,,,
+,-- For non-electric fuels demand = consumption: the fuel is burned at the point of demand. --,,,,,,,,,
+,-- For electricity: both IEA TFC and SISEPUEDE demand measure at point of delivery to industry --,,,,,,,,,
+,"-- (before T&D losses), so they are directly comparable. --",,,,,,,,,
+,,,,,,,,,,
+INDUSTRY,Industry total final consumption by source,COAL,Coal,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_coal,direct,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; demand = consumption for solid fuels
+INDUSTRY,Industry total final consumption by source,OIL,Oil,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_crude:energy_demand_enfu_subsector_total_pj_inen_fuel_diesel:energy_demand_enfu_subsector_total_pj_inen_fuel_gasoline:energy_demand_enfu_subsector_total_pj_inen_fuel_kerosene:energy_demand_enfu_subsector_total_pj_inen_fuel_oil,sum,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; IEA Oil = all liquid petroleum products
+INDUSTRY,Industry total final consumption by source,NATGAS,Natural gas,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_natural_gas,direct,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; demand = consumption for gas
+INDUSTRY,Industry total final consumption by source,ELECTR,Electricity,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_electricity,direct,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; both IEA and SISEPUEDE measure electricity at point of delivery (comparable); energy_consumption_electricity_inen_total is a true consumption var but carries no fuel label
+INDUSTRY,Industry total final consumption by source,BIOWASTE,Biofuels and waste,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_biofuels:energy_demand_enfu_subsector_total_pj_inen_fuel_biogas:energy_demand_enfu_subsector_total_pj_inen_fuel_biomass:energy_demand_enfu_subsector_total_pj_inen_fuel_waste,sum,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; sum all biogenic fuels
+INDUSTRY,Industry total final consumption by source,GEOTHERM,Geothermal,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_geothermal,direct,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output
+INDUSTRY,Industry total final consumption by source,WINDSOLAR,Wind solar etc.,inen,energy_demand_enfu_subsector_total_pj_inen_fuel_solar:energy_demand_enfu_subsector_total_pj_inen_fuel_wind,sum,PJ,1000.0,approximate,No per-fuel consumption output in INEN; using ENFU demand output; rare in industry but included for completeness
+,,,,,,,,,,
+,--- RESIDENTIAL TOTAL FINAL CONSUMPTION BY SOURCE ---,,,,,,,,,
+,,,,,,,,,,
+,-- IEA provides consumption by fuel for residential only. SISEPUEDE has the same structural --,,,,,,,,,
+,-- gap as INEN: no per-fuel consumption output for SCOE. The ENFU demand variables for scoe --,,,,,,,,,
+,-- (energy_demand_enfu_subsector_total_pj_scoe_$CAT-FUEL$) aggregate ALL scoe sub-categories --,,,,,,,,,
+,-- (residential + commercial_municipal + other_se) and cannot be split by sub-category. --,,,,,,,,,
+,-- Mapping quality is partial: numbers will be larger than IEA residential alone. --,,,,,,,,,
+,-- For sector totals use energy_consumption_scoe_residential (true consumption by sub-category). --,,,,,,,,,
+,,,,,,,,,,
+RESIDENT,Residential total final consumption by source,COAL,Coal,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_coal,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; ENFU demand aggregates all scoe sub-categories (residential+commercial+other) — cannot isolate residential
+RESIDENT,Residential total final consumption by source,OIL,Oil products,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_diesel:energy_demand_enfu_subsector_total_pj_scoe_fuel_kerosene:energy_demand_enfu_subsector_total_pj_scoe_fuel_oil,sum,PJ,1000.0,partial,No per-fuel consumption output in SCOE; ENFU demand aggregates all scoe sub-categories (residential+commercial+other) — cannot isolate residential
+RESIDENT,Residential total final consumption by source,NATGAS,Natural gas,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_natural_gas,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; ENFU demand aggregates all scoe sub-categories (residential+commercial+other) — cannot isolate residential
+RESIDENT,Residential total final consumption by source,ELECTR,Electricity,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_electricity,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; ENFU demand aggregates all scoe sub-categories (residential+commercial+other) — cannot isolate residential
+RESIDENT,Residential total final consumption by source,BIOWASTE,Biofuels and waste,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_biofuels:energy_demand_enfu_subsector_total_pj_scoe_fuel_biogas:energy_demand_enfu_subsector_total_pj_scoe_fuel_biomass,sum,PJ,1000.0,partial,No per-fuel consumption output in SCOE; ENFU demand aggregates all scoe sub-categories (residential+commercial+other) — cannot isolate residential
+,,,,,,,,,,
+,--- COMMERCIAL AND PUBLIC SERVICES TOTAL FINAL CONSUMPTION BY SOURCE ---,,,,,,,,,
+,,,,,,,,,,
+,-- Same structural gap as residential: ENFU scoe demand is the only per-fuel output --,,,,,,,,,
+,-- available and it covers all scoe sub-categories combined. The SISEPUEDE variable --,,,,,,,,,
+,-- energy_consumption_scoe_commercial_municipal is a true consumption output but has --,,,,,,,,,
+,-- no fuel breakdown. These rows map the same scoe-aggregate ENFU demand as the --,,,,,,,,,
+,-- residential rows above; do not sum residential + commercial rows to avoid double-counting. --,,,,,,,,,
+,,,,,,,,,,
+COMMPUB,Commercial and public services total final consumption by source,COAL,Coal,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_coal,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; same scoe-wide ENFU demand as residential rows — do not sum with residential
+COMMPUB,Commercial and public services total final consumption by source,OIL,Oil products,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_diesel:energy_demand_enfu_subsector_total_pj_scoe_fuel_kerosene:energy_demand_enfu_subsector_total_pj_scoe_fuel_oil,sum,PJ,1000.0,partial,No per-fuel consumption output in SCOE; same scoe-wide ENFU demand as residential rows — do not sum with residential
+COMMPUB,Commercial and public services total final consumption by source,NATGAS,Natural gas,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_natural_gas,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; same scoe-wide ENFU demand as residential rows — do not sum with residential
+COMMPUB,Commercial and public services total final consumption by source,ELECTR,Electricity,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_electricity,direct,PJ,1000.0,partial,No per-fuel consumption output in SCOE; same scoe-wide ENFU demand as residential rows — do not sum with residential
+COMMPUB,Commercial and public services total final consumption by source,BIOWASTE,Biofuels and waste,scoe,energy_demand_enfu_subsector_total_pj_scoe_fuel_biofuels:energy_demand_enfu_subsector_total_pj_scoe_fuel_biogas:energy_demand_enfu_subsector_total_pj_scoe_fuel_biomass,sum,PJ,1000.0,partial,No per-fuel consumption output in SCOE; same scoe-wide ENFU demand as residential rows — do not sum with residential
+,,,,,,,,,,
+,--- TRANSPORT TOTAL FINAL CONSUMPTION BY SOURCE ---,,,,,,,,,
+,,,,,,,,,,
+,-- Transport IS different: SISEPUEDE has energy_consumption_trns_{mode}_{fuel} --,,,,,,,,,
+,-- which are true consumption variables. These are summed across all modes here. --,,,,,,,,,
+,,,,,,,,,,
+TRANSPORT,Transport total final consumption by source,OIL,Oil products,trns,energy_consumption_trns_public_diesel:energy_consumption_trns_rail_freight_diesel:energy_consumption_trns_rail_passenger_diesel:energy_consumption_trns_road_heavy_freight_diesel:energy_consumption_trns_road_heavy_regional_diesel:energy_consumption_trns_road_light_diesel:energy_consumption_trns_water_borne_diesel:energy_consumption_trns_powered_bikes_gasoline:energy_consumption_trns_public_gasoline:energy_consumption_trns_road_heavy_freight_gasoline:energy_consumption_trns_road_heavy_regional_gasoline:energy_consumption_trns_road_light_gasoline:energy_consumption_trns_aviation_kerosene,sum,PJ,1000.0,approximate,Consumption variables summed across all modes; IEA Oil products = diesel+gasoline+kerosene aggregate
+TRANSPORT,Transport total final consumption by source,ELECTR,Electricity,trns,energy_consumption_trns_aviation_electricity:energy_consumption_trns_powered_bikes_electricity:energy_consumption_trns_public_electricity:energy_consumption_trns_rail_freight_electricity:energy_consumption_trns_rail_passenger_electricity:energy_consumption_trns_road_heavy_freight_electricity:energy_consumption_trns_road_heavy_regional_electricity:energy_consumption_trns_road_light_electricity:energy_consumption_trns_water_borne_electricity,sum,PJ,1000.0,exact,Consumption variables summed across all modes
+TRANSPORT,Transport total final consumption by source,NATGAS,Natural gas,trns,energy_consumption_trns_public_natural_gas:energy_consumption_trns_rail_freight_natural_gas:energy_consumption_trns_rail_passenger_natural_gas:energy_consumption_trns_road_heavy_freight_natural_gas:energy_consumption_trns_road_heavy_regional_natural_gas:energy_consumption_trns_water_borne_natural_gas,sum,PJ,1000.0,exact,Consumption variables summed across all modes
+TRANSPORT,Transport total final consumption by source,BIOWASTE,Biofuels and waste,trns,energy_consumption_trns_public_biofuels:energy_consumption_trns_road_heavy_freight_biofuels:energy_consumption_trns_road_heavy_regional_biofuels:energy_consumption_trns_road_light_biofuels,sum,PJ,1000.0,approximate,Consumption variables summed across all modes
+TRANSPORT,Transport total final consumption by source,HYDROGEN,Hydrogen,trns,energy_consumption_trns_aviation_hydrogen:energy_consumption_trns_public_hydrogen:energy_consumption_trns_rail_freight_hydrogen:energy_consumption_trns_rail_passenger_hydrogen:energy_consumption_trns_road_heavy_freight_hydrogen:energy_consumption_trns_road_heavy_regional_hydrogen:energy_consumption_trns_road_light_hydrogen:energy_consumption_trns_water_borne_hydrogen,sum,PJ,1000.0,exact,Consumption variables summed across all modes
+,,,,,,,,,,
+,--- INDUSTRY SUB-SECTOR CONSUMPTION (where IEA sub-sector data available) ---,,,,,,,,,
+,,,,,,,,,,
+IRONSTL,Industry total final consumption by source,IRONSTL,Iron and steel,inen,energy_consumption_inen_metals,direct,PJ,1000.0,partial,fuel_metals covers all metals; no iron/steel split in SISEPUEDE
+CHEMICAL,Industry total final consumption by source,CHEMICAL,Chemical and petrochemical,inen,energy_consumption_inen_chemicals,direct,PJ,1000.0,approximate,
+NONMET,Industry total final consumption by source,NONMET,Non-metallic minerals,inen,energy_consumption_inen_cement:energy_consumption_inen_glass:energy_consumption_inen_lime_and_carbonite,sum,PJ,1000.0,approximate,IEA non-metallic minerals ~ SISEPUEDE cement + glass + lime_and_carbonite
+MINING,Industry total final consumption by source,MINING,Mining and quarrying,inen,energy_consumption_inen_mining,direct,PJ,1000.0,exact,
+PAPERPRO,Industry total final consumption by source,PAPERPRO,Paper pulp and printing,inen,energy_consumption_inen_paper,direct,PJ,1000.0,approximate,
+WOODPRO,Industry total final consumption by source,WOODPRO,Wood and wood products,inen,energy_consumption_inen_wood,direct,PJ,1000.0,approximate,
+TEXTILES,Industry total final consumption by source,TEXTILES,Textile and leather,inen,energy_consumption_inen_textiles:energy_consumption_inen_rubber_and_leather,sum,PJ,1000.0,approximate,
+CONSTRUC,Industry total final consumption by source,CONSTRUC,Construction,inen,,none,PJ,1000.0,no_match,No construction sub-sector in SISEPUEDE inen
+INONSPEC,Industry total final consumption by source,INONSPEC,Non-specified industry,inen,energy_consumption_inen_other_product_manufacturing,direct,PJ,1000.0,partial,other_product_manufacturing is a residual; partial match only
