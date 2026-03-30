@@ -15,10 +15,11 @@ Typical usage
     file_struct      = SISEPUEDEFileStructure()
     model_attributes = file_struct.model_attributes
 
-    xw = IEACrosswalk(model_attributes)
+    loader  = IEADataLoader("/path/to/data_collection_temporary", model_attributes)
+    xw      = IEACrosswalk(model_attributes)
 
     df_ssp  = xw.aggregate_sisepuede(df_out_energycon, col_year = "year")
-    df_iea  = xw.prepare_iea(df_iea_raw, iso = "LBY")
+    df_iea  = loader.load_country("LBY")
     df_comp = xw.build_comparison(df_ssp, df_iea)
     df_summ = xw.summary(df_comp)
 """
@@ -59,7 +60,6 @@ class IEACrosswalk:
     into a comparison table:
 
         aggregate_sisepuede()  — apply the crosswalk to a SISEPUEDE output frame
-        prepare_iea()          — normalise an IEA dataframe to the same shape
         build_comparison()     — outer-join both into a paired comparison table
         summary()              — one-row-per-(balance, product) diagnostic
     """
@@ -307,100 +307,6 @@ class IEACrosswalk:
         
         return pd.concat(rows, ignore_index=True)
     
-    def prepare_iea(self,
-        df_iea_raw: pd.DataFrame,
-        iso: Union[str, None] = None,
-    ) -> pd.DataFrame:
-         
-        """
-        Normalise a raw IEA World Energy Balances file to long format.
-
-        Steps:
-        1. Map IEA country names -> ISO codes via regions.
-        2. Optionally filter to a single country.
-        3. Map balance/product names to crosswalk codes.
-        4. Keep only (balance, product) pairs present in the crosswalk.
-        5. Convert values to TJ.
-
-        Function Arguments
-        ------------------
-        df_iea_raw : pd.DataFrame
-            Raw IEA download. Expected columns: Balance, Country, Product,
-            Time, Unit, Value (set in SISEPUEDERegions._initialize_defaults_iea).
-
-        Keyword Arguments
-        -----------------
-        iso : Union[str, None]
-            ISO-3 country code to filter to (e.g. "LBY"). If None, keeps all.
-        """
-
-        if len(df_iea_raw) == 0:
-            return pd.DataFrame(columns = [
-                "iso_alpha_3", "iea_balance_code",
-                "iea_product_code", "year", "value_iea_tj",                  
-            ])
-        
-        df = df_iea_raw.copy()
-
-        ##  STEP 1 — country names -> ISO codes
-
-        df = self.regions.data_func_iea_get_isos_from_countries(
-            df,
-            field_country = self.field_country,
-            return_modified_df = True,
-        )
-        df = df.rename(columns = {self.regions.field_iso: "iso_alpha_3"})
-
-        ##  STEP 2 — optional country filter
-
-        if iso is not None:
-            df = df[df["iso_alpha_3"] == iso].copy()
-
-        if len(df) == 0:
-            return pd.DataFrame(columns = [
-                "iso_alpha_3", "iea_balance_code",
-                "iea_product_code", "year", "value_iea_tj",
-            ])
-
-        ##  STEP 3 — map names to codes
-
-        balance_map = (
-            self.df_crosswalk[["iea_balance_name", "iea_balance_code"]]
-            .drop_duplicates()
-            .set_index("iea_balance_name")["iea_balance_code"]
-            .to_dict()
-        )
-        product_map = (
-            self.df_crosswalk[["iea_product_name", "iea_product_code"]]
-            .drop_duplicates()
-            .set_index("iea_product_name")["iea_product_code"]
-            .to_dict()
-        )
-
-        df["iea_balance_code"] = df[self.field_balance].map(balance_map)
-        df["iea_product_code"] = df[self.field_product].map(product_map)
-
-        ##  STEP 4 — keep matched pairs only
-
-        df = df.dropna(subset = ["iea_balance_code", "iea_product_code"])
-
-        ##  STEP 5 — convert to TJ
-
-        df["value_iea_tj"] = df.apply(
-            lambda row: self._to_tj(row[self.field_value], row[self.field_unit]),
-            axis = 1,
-        )
-
-        return (
-            df[[
-                "iso_alpha_3", "iea_balance_code", "iea_product_code",
-                self.field_time, "value_iea_tj",
-            ]]
-            .rename(columns = {self.field_time: "year"})
-            .reset_index(drop = True)
-        )
-    
-
     def build_comparison(self,
         df_sisepuede_long: pd.DataFrame,
         df_iea_long: pd.DataFrame,
@@ -422,7 +328,7 @@ class IEACrosswalk:
         df_sisepuede_long : pd.DataFrame
             Output of aggregate_sisepuede().
         df_iea_long : pd.DataFrame
-            Output of prepare_iea().
+            Output of IEADataLoader.load_country().
 
         Keyword Arguments
         -----------------
