@@ -114,15 +114,3 @@ TRANSPORT,Transport total final consumption by source,ELECTR,Electricity,trns,en
 TRANSPORT,Transport total final consumption by source,NATGAS,Natural gas,trns,energy_consumption_trns_public_natural_gas:energy_consumption_trns_rail_freight_natural_gas:energy_consumption_trns_rail_passenger_natural_gas:energy_consumption_trns_road_heavy_freight_natural_gas:energy_consumption_trns_road_heavy_regional_natural_gas:energy_consumption_trns_water_borne_natural_gas,sum,PJ,1000.0,exact,Consumption variables summed across all modes
 TRANSPORT,Transport total final consumption by source,BIOWASTE,Biofuels and waste,trns,energy_consumption_trns_public_biofuels:energy_consumption_trns_road_heavy_freight_biofuels:energy_consumption_trns_road_heavy_regional_biofuels:energy_consumption_trns_road_light_biofuels,sum,PJ,1000.0,approximate,Consumption variables summed across all modes
 TRANSPORT,Transport total final consumption by source,HYDROGEN,Hydrogen,trns,energy_consumption_trns_aviation_hydrogen:energy_consumption_trns_public_hydrogen:energy_consumption_trns_rail_freight_hydrogen:energy_consumption_trns_rail_passenger_hydrogen:energy_consumption_trns_road_heavy_freight_hydrogen:energy_consumption_trns_road_heavy_regional_hydrogen:energy_consumption_trns_road_light_hydrogen:energy_consumption_trns_water_borne_hydrogen,sum,PJ,1000.0,exact,Consumption variables summed across all modes
-,,,,,,,,,,
-,--- INDUSTRY SUB-SECTOR CONSUMPTION (where IEA sub-sector data available) ---,,,,,,,,,
-,,,,,,,,,,
-IRONSTL,Industry total final consumption by source,IRONSTL,Iron and steel,inen,energy_consumption_inen_metals,direct,PJ,1000.0,partial,fuel_metals covers all metals; no iron/steel split in SISEPUEDE
-CHEMICAL,Industry total final consumption by source,CHEMICAL,Chemical and petrochemical,inen,energy_consumption_inen_chemicals,direct,PJ,1000.0,approximate,
-NONMET,Industry total final consumption by source,NONMET,Non-metallic minerals,inen,energy_consumption_inen_cement:energy_consumption_inen_glass:energy_consumption_inen_lime_and_carbonite,sum,PJ,1000.0,approximate,IEA non-metallic minerals ~ SISEPUEDE cement + glass + lime_and_carbonite
-MINING,Industry total final consumption by source,MINING,Mining and quarrying,inen,energy_consumption_inen_mining,direct,PJ,1000.0,exact,
-PAPERPRO,Industry total final consumption by source,PAPERPRO,Paper pulp and printing,inen,energy_consumption_inen_paper,direct,PJ,1000.0,approximate,
-WOODPRO,Industry total final consumption by source,WOODPRO,Wood and wood products,inen,energy_consumption_inen_wood,direct,PJ,1000.0,approximate,
-TEXTILES,Industry total final consumption by source,TEXTILES,Textile and leather,inen,energy_consumption_inen_textiles:energy_consumption_inen_rubber_and_leather,sum,PJ,1000.0,approximate,
-CONSTRUC,Industry total final consumption by source,CONSTRUC,Construction,inen,,none,PJ,1000.0,no_match,No construction sub-sector in SISEPUEDE inen
-INONSPEC,Industry total final consumption by source,INONSPEC,Non-specified industry,inen,energy_consumption_inen_other_product_manufacturing,direct,PJ,1000.0,partial,other_product_manufacturing is a residual; partial match only
