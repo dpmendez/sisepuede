@@ -311,6 +311,8 @@ class IEACrosswalk:
         df_sisepuede_long: pd.DataFrame,
         df_iea_long: pd.DataFrame,
         col_year: str = "year",
+        year_min: Union[int, None] = None,
+        year_max: Union[int, None] = None,
     ) -> pd.DataFrame:
         """
         Outer-join SISEPUEDE and IEA long frames on
@@ -334,7 +336,29 @@ class IEACrosswalk:
         -----------------
         col_year : str
             Shared year column name. Default "year".
+        year_min : int | None
+            If given, rows with year < year_min are dropped from both frames
+            before joining.  Use this to align the IEA historical range with
+            the SISEPUEDE simulation start year (e.g. year_min=2015).
+        year_max : int | None
+            If given, rows with year > year_max are dropped from both frames
+            before joining.  Useful to exclude IEA projection years or
+            SISEPUEDE years that extend beyond available ground truth.
         """
+
+        # Apply year-range filter to both frames before joining so that
+        # years present only in IEA (or only in SSP) outside the window do
+        # not produce spurious NaN rows in the comparison table.
+        if year_min is not None or year_max is not None:
+            def _clip(df: pd.DataFrame) -> pd.DataFrame:
+                mask = pd.Series(True, index=df.index)
+                if year_min is not None:
+                    mask &= df[col_year] >= year_min
+                if year_max is not None:
+                    mask &= df[col_year] <= year_max
+                return df.loc[mask]
+            df_sisepuede_long = _clip(df_sisepuede_long)
+            df_iea_long       = _clip(df_iea_long)
 
         join_keys = ["iea_balance_code", "iea_product_code", col_year]
 
@@ -376,6 +400,26 @@ class IEACrosswalk:
             "mapping_quality",
         ]
         group_cols = [c for c in group_cols if c in df_comparison.columns]
+
+        # Outer-join rows that come only from the IEA side have NaN in
+        # crosswalk-metadata columns (iea_balance_name, iea_product_name,
+        # mapping_quality) because those columns originate in the SISEPUEDE
+        # frame. With dropna=False, pandas treats NaN as a distinct group key,
+        # which splits each (balance, product) pair into two rows — one with
+        # real metadata and n_years_matched > 0, and one with NaN metadata and
+        # n_years_matched = 0. Fill NaN metadata within each code-pair first
+        # so every row in the same pair carries identical group-key values.
+        meta_fill_cols = [c for c in group_cols
+                          if c not in ("iea_balance_code", "iea_product_code")]
+        if meta_fill_cols:
+            df_comparison = df_comparison.copy()
+            pair_keys = ["iea_balance_code", "iea_product_code"]
+            for col in meta_fill_cols:
+                df_comparison[col] = (
+                    df_comparison
+                    .groupby(pair_keys, sort=False)[col]
+                    .transform(lambda x: x.ffill().bfill())
+                )
 
         return (
             df_comparison

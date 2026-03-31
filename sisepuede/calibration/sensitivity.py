@@ -328,6 +328,14 @@ class SensitivityRunner:
         Passed to SISEPUEDEModels.project() as include_electricity_in_energy.
         Set True only when calibrating supply-side variables that require
         the Julia EnergyProduction back-end. Ignored for EnergyConsumption.
+    year_min : int | None
+        If given, passed to IEACrosswalk.build_comparison() so that both
+        the IEA frame and the SISEPUEDE frame are trimmed to year >= year_min
+        before joining.  Prevents IEA-only rows from years outside the
+        simulation window from polluting the comparison table.
+    year_max : int | None
+        If given, passed to IEACrosswalk.build_comparison() so that both
+        frames are trimmed to year <= year_max before joining.
     """
 
     def __init__(
@@ -338,6 +346,8 @@ class SensitivityRunner:
         df_iea_raw: pd.DataFrame,
         iso: str,
         include_energy_production: bool = False,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
     ) -> None:
 
         self.models                   = models
@@ -346,6 +356,8 @@ class SensitivityRunner:
         self.df_iea_raw               = df_iea_raw
         self.iso                      = iso
         self.include_energy_production = include_energy_production
+        self.year_min                 = year_min
+        self.year_max                 = year_max
 
         # lazily computed and cached
         self._baseline_output         = None
@@ -389,6 +401,8 @@ class SensitivityRunner:
             df_ssp  = self.iea_crosswalk.aggregate_sisepuede(self.baseline_output)
             self._baseline_iea_comparison = self.iea_crosswalk.build_comparison(
                 df_ssp, self.baseline_iea_long,
+                year_min=self.year_min,
+                year_max=self.year_max,
             )
         return self._baseline_iea_comparison
 
@@ -447,7 +461,11 @@ class SensitivityRunner:
             )
         df_out  = self._attach_year(df_out)
         df_ssp  = self.iea_crosswalk.aggregate_sisepuede(df_out)
-        df_comp = self.iea_crosswalk.build_comparison(df_ssp, self.baseline_iea_long)
+        df_comp = self.iea_crosswalk.build_comparison(
+            df_ssp, self.baseline_iea_long,
+            year_min=self.year_min,
+            year_max=self.year_max,
+        )
         return df_out, df_comp
 
     def _collect_results(
