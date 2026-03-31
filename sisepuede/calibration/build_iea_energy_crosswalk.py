@@ -1064,7 +1064,7 @@ class IEACrosswalkBuilder:
         all_rows += self._rows_residential_by_source()
         all_rows += self._rows_commercial_by_source()
         all_rows += self._rows_transport_by_source()
-        all_rows += self._rows_industry_subsectors()
+        # all_rows += self._rows_industry_subsectors() # we dont have this level of info (yet)
 
         df = pd.DataFrame(all_rows, columns = _COLS)
 
