@@ -70,48 +70,57 @@ _KTOE_TO_TJ = 41.868    # 1 ktoe = 41.868 TJ
 ##  Row label -> iea_product_code
 _ROW_LABEL_TO_PRODUCT: Dict[str, str] = {
     # Energy products (used in supply / sectoral-by-source / electricity folders)
-    "coal":                         "COAL",
-    "oil":                          "OIL",
-    "oil products":                 "OIL",
-    "natural gas":                  "NATGAS",
-    "nuclear":                      "NUCLEAR",
-    "hydro":                        "HYDRO",
-    "wind solar etc.":              "WINDSOLAR",
-    "wind":                         "WIND",
-    "solar pv":                     "SOLARPV",
-    "solar thermal":                "SOLARTH",
-    "biofuels and waste":           "BIOWASTE",
-    "biofuels":                     "BIOFUEL",
-    "waste":                        "WASTE",
-    "geothermal":                   "GEOTHERM",
-    "tide":                         "TIDE",
-    "electricity":                  "ELECTR",
-    "total":                        "TOTAL",
-    "losses":                       "LOSSES",
-    "hydrogen":                     "HYDROGEN",
+    "coal":                                 "COAL",
+    "oil":                                  "OIL",
+    "oil products":                         "OIL",
+    "natural gas":                          "NATGAS",
+    "nuclear":                              "NUCLEAR",
+    "hydro":                                "HYDRO",
+    "wind solar etc.":                      "WINDSOLAR",
+    "wind":                                 "WIND",
+    "solar pv":                             "SOLARPV",
+    "solar thermal":                        "SOLARTH",
+    "biofuels and waste":                   "BIOWASTE",
+    "biofuels":                             "BIOFUEL",
+    "waste":                                "WASTE",
+    "geothermal":                           "GEOTHERM",
+    "tide":                                 "TIDE",
+    "electricity":                          "ELECTR",
+    "electricity (outdated, before dc/ac)": "ELECTR", # e.g. Peru
+    "total":                                "TOTAL",
+    "losses":                               "LOSSES",
+    "hydrogen":                             "HYDROGEN",
     # Imports / exports rows
-    "imports":                      "IMPORTS",
-    "exports":                      "EXPORTS",
+    "imports":                              "IMPORTS",
+    "exports":                              "EXPORTS",
 }
 
 ##  Row label -> iea_balance_code (only used when mode == "balance_from_row",
 ##  i.e. the total_final_energy_consumption folder where each row IS a sector)
+##  IEA row labels vary by country (e.g. "Industry" vs "Industry Sector"),
+##  so multiple variants are listed for each sector.
 _ROW_LABEL_TO_BALANCE_TFC: Dict[str, str] = {
     "industry":                                 "INDUSTRY",
+    "industry sector":                          "INDUSTRY",   # e.g. Peru
     "transport":                                "TRANSPORT",
+    "transport sector":                         "TRANSPORT",  # e.g. Peru
     "residential":                              "RESIDENT",
     "commercial and public services":           "COMMPUB",
     "agriculture / forestry":                   "AGRICULT",
+    "agriculture/forestry":                     "AGRICULT",   # e.g. Peru (no spaces)
     "agriculture":                              "AGRICULT",
 }
 
 ##  Corresponding product codes for the TFC-sector rows
 _ROW_LABEL_TO_PRODUCT_TFC: Dict[str, str] = {
     "industry":                                 "INDUSTRY",
+    "industry sector":                          "INDUSTRY",
     "transport":                                "TRANSPORT",
+    "transport sector":                         "TRANSPORT",
     "residential":                              "RESIDENTIAL",
     "commercial and public services":           "COMMPUB",
     "agriculture / forestry":                   "AGRICULT",
+    "agriculture/forestry":                     "AGRICULT",
     "agriculture":                              "AGRICULT",
 }
 
