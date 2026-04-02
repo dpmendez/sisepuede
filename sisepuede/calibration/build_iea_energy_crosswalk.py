@@ -6,7 +6,7 @@ IEACrosswalkBuilder
 Programmatically build the IEA <-> SISEPUEDE energy crosswalk CSV.
 
 Each crosswalk row maps one IEA (Balance x Product) pair to one or more
-SISEPUEDE output column names.  Field names are verified against
+SISEPUEDE output column names. Field names are verified against
 model_attributes at build time using ModelVariable.build_fields(), so the
 output CSV always reflects the actual fields present in the installed version
 of SISEPUEDE.
@@ -190,7 +190,7 @@ class IEACrosswalkBuilder:
         Keyword Arguments
         -----------------
         categories : Union[List[str], str, None]
-            Category values to restrict to.  Passed directly to
+            Category values to restrict to. Passed directly to
             build_fields(category_restrictions = ...).
             * None  -> all categories (returns full list of fields)
             * list  -> filtered to the listed categories
@@ -284,7 +284,8 @@ class IEACrosswalkBuilder:
 
         rows = self._section("ENERGY SUPPLY")
 
-        prod_var = "Fuel Production"
+        # prod_var = "Fuel Production"
+        prod_var = "Total Energy Demand by Fuel"
 
         for product_code, product_name, fuel_cats, agg, quality, notes in [
             (
@@ -296,14 +297,14 @@ class IEACrosswalkBuilder:
             ),
             (
                 "NATGAS",   "Natural gas",
-                ["fuel_natural_gas", "natural_gas_liquid"],
+                ["fuel_natural_gas"],
                 "direct", "exact", "",
             ),
             (
                 "OIL",      "Oil",
-                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene", "fuel_hydrocarbon"],
+                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene", "fuel_hydrocarbon", "natural_gas_liquid"],
                 "sum", "approximate",
-                "IEA Oil includes crude and NGL; SISEPUEDE fuel_crude is the closest analog. "
+                "IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} and natural_gas_liquid is the closest analog."
                 "HGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES",
             ),
             (
@@ -314,8 +315,7 @@ class IEACrosswalkBuilder:
             (
                 "HYDRO",    "Hydro",
                 ["fuel_water"],
-                "direct", "exact",
-                "SISEPUEDE fuel_water maps to hydro",
+                "direct", "exact", "",
             ),
             (
                 "WINDSOLAR", "Wind solar etc.",
@@ -456,7 +456,7 @@ class IEACrosswalkBuilder:
     def _rows_electricity_generation(self) -> List[Dict[str, Any]]:
         """
         Build crosswalk rows for the Electricity Generation by Source section.
-        IEA balance: ELECTOUT.  IEA unit is GWh; SISEPUEDE is PJ.
+        IEA balance: ELECTOUT. IEA unit is GWh; SISEPUEDE is PJ.
         SISEPUEDE variable: NemoMod Production by Technology.
         """
 
@@ -653,11 +653,11 @@ class IEACrosswalkBuilder:
         """
         Build crosswalk rows for Industry Total Final Consumption by Source.
 
-        IEA provides fuel-level breakdowns for industry.  SISEPUEDE INEN
-        outputs consumption by industrial sub-category, not by fuel.  The
+        IEA provides fuel-level breakdowns for industry. SISEPUEDE INEN
+        outputs consumption by industrial sub-category, not by fuel. The
         only per-fuel output for INEN is energy_demand_enfu_subsector_total_pj
-        _inen_$CAT-FUEL$ (recorded in the ENFU subsector).  For non-electric
-        fuels demand equals consumption.  For electricity both IEA TFC and
+        _inen_$CAT-FUEL$ (recorded in the ENFU subsector). For non-electric
+        fuels demand equals consumption. For electricity both IEA TFC and
         SISEPUEDE demand measure at point of delivery before T&D losses, so
         they are directly comparable.
         """
@@ -786,12 +786,13 @@ class IEACrosswalkBuilder:
         )
 
         for product_code, product_name, fuel_cats, agg in [
-            ("COAL",    "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",     "Oil products",      ["fuel_diesel", "fuel_kerosene",
-                                              "fuel_oil"],             "sum"),
-            ("NATGAS",  "Natural gas",       ["fuel_natural_gas"],     "direct"),
-            ("ELECTR",  "Electricity",       ["fuel_electricity"],     "direct"),
-            ("BIOWASTE","Biofuels and waste",["fuel_biomass", "fuel_biogas",
+            ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
+            ("OIL",      "Oil products",      ["fuel_crude", "fuel_diesel", "fuel_gasoline",
+                                              "fuel_kerosene", "fuel_oil", ], "sum"),
+            ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
+            ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
+            ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
+            ("BIOWASTE", "Biofuels and waste",["fuel_biomass", "fuel_biogas",
                                               "fuel_biofuels"],        "sum"),
         ]:
             rows.append(self._row(
@@ -811,8 +812,8 @@ class IEACrosswalkBuilder:
         Build crosswalk rows for Commercial and Public Services Total Final
         Consumption by Source.
 
-        Same ENFU-only structural gap as residential.  The rows point to the
-        same scoe-aggregate ENFU demand variables.  Do not sum residential +
+        Same ENFU-only structural gap as residential. The rows point to the
+        same scoe-aggregate ENFU demand variables. Do not sum residential +
         commercial rows to avoid double-counting.
         """
 
@@ -844,12 +845,13 @@ class IEACrosswalkBuilder:
         )
 
         for product_code, product_name, fuel_cats, agg in [
-            ("COAL",    "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",     "Oil products",      ["fuel_diesel", "fuel_kerosene",
-                                              "fuel_oil"],             "sum"),
-            ("NATGAS",  "Natural gas",       ["fuel_natural_gas"],     "direct"),
-            ("ELECTR",  "Electricity",       ["fuel_electricity"],     "direct"),
-            ("BIOWASTE","Biofuels and waste",["fuel_biomass", "fuel_biogas",
+            ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
+            ("OIL",      "Oil products",      ["fuel_crude", "fuel_diesel", "fuel_gasoline",
+                                              "fuel_kerosene", "fuel_oil", ], "sum"),
+            ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
+            ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
+            ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
+            ("BIOWASTE", "Biofuels and waste",["fuel_biomass", "fuel_biogas",
                                               "fuel_biofuels"],        "sum"),
         ]:
             rows.append(self._row(
@@ -892,10 +894,11 @@ class IEACrosswalkBuilder:
                     "Transportation Modal Energy Consumption from Diesel",
                     "Transportation Modal Energy Consumption from Gasoline",
                     "Transportation Modal Energy Consumption from Kerosene",
+                    "Transportation Modal Energy Consumption from Hydrocarbon Gas Liquids",
                 ],
                 "sum", "approximate",
                 "Consumption variables summed across all modes; "
-                "IEA Oil products = diesel+gasoline+kerosene aggregate",
+                "IEA Oil products = diesel+gasoline+kerosene+hgl aggregate",
             ),
             (
                 "ELECTR", "Electricity",
@@ -913,7 +916,7 @@ class IEACrosswalkBuilder:
                 "BIOWASTE", "Biofuels and waste",
                 ["Transportation Modal Energy Consumption from Biofuels"],
                 "sum", "approximate",
-                "Consumption variables summed across all modes",
+                "Consumption from biofuel variables summed across all modes; SSP does not output waste.",
             ),
             (
                 "HYDROGEN", "Hydrogen",
@@ -984,7 +987,7 @@ class IEACrosswalkBuilder:
                 "SISEPUEDE cement + glass + lime_and_carbonite",
             ),
             (
-                "MINING",   "Mining and quarrying",
+                "MINING", "Mining and quarrying",
                 ["mining"],
                 "direct", "exact", "",
             ),
@@ -994,7 +997,7 @@ class IEACrosswalkBuilder:
                 "direct", "approximate", "",
             ),
             (
-                "WOODPRO",  "Wood and wood products",
+                "WOODPRO", "Wood and wood products",
                 ["wood"],
                 "direct", "approximate", "",
             ),
