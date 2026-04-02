@@ -623,9 +623,10 @@ class IEACrosswalkBuilder:
         ))
         rows.append(self._row(
             "RESIDENT", "Total final energy consumption",
-            "RESIDENTIAL", "Residential",
+            "RESIDENT", "Residential",
             "scoe",
-            [f for f in scoe_cat_fields if "residential" in f],
+            # [f for f in scoe_cat_fields if "residential" in f],
+            ["energy_consumption_scoe_residential"],
             "direct", "PJ", 1000, "exact",
             "Consumption variable (point-of-use)",
         ))
@@ -633,7 +634,8 @@ class IEACrosswalkBuilder:
             "COMMPUB", "Total final energy consumption",
             "COMMPUB", "Commercial and public services",
             "scoe",
-            [f for f in scoe_cat_fields if "commercial_municipal" in f],
+            # [f for f in scoe_cat_fields if "commercial_municipal" in f],
+            ["energy_consumption_scoe_commercial_municipal"],
             "direct", "PJ", 1000, "exact",
             "Consumption variable (point-of-use)",
         ))
@@ -641,7 +643,8 @@ class IEACrosswalkBuilder:
             "AGRICULT", "Total final energy consumption",
             "AGRICULT", "Agriculture / forestry",
             "scoe",
-            [f for f in scoe_cat_fields if "other_se" in f],
+            # [f for f in scoe_cat_fields if "other_se" in f],
+            ["energy_consumption_scoe_other_se"],
             "direct", "PJ", 1000, "partial",
             "SISEPUEDE other_se is a residual; partial match only",
         ))

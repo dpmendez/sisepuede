@@ -117,7 +117,7 @@ _ROW_LABEL_TO_PRODUCT_TFC: Dict[str, str] = {
     "industry sector":                          "INDUSTRY",
     "transport":                                "TRANSPORT",
     "transport sector":                         "TRANSPORT",
-    "residential":                              "RESIDENTIAL",
+    "residential":                              "RESIDENT",
     "commercial and public services":           "COMMPUB",
     "agriculture / forestry":                   "AGRICULT",
     "agriculture/forestry":                     "AGRICULT",
