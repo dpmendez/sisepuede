@@ -2,6 +2,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import seaborn as sns
 from matplotlib.pyplot import Figure
 from matplotlib.axes import Axes
 from typing import *
@@ -268,26 +269,31 @@ def _plot_detailed_single(
     third_label: str,
 ):
     df = df_pair.copy()
-    
+
     if 'difference_sisepuede_iea' not in df.columns:
         df['difference_sisepuede_iea'] = df['value_sisepuede_tj'] - df['value_iea_tj']
-    
+
     if 'rel_error_iea' not in df.columns:
-        df['rel_error_iea'] = (
+        df['perc_difference_sisepuede'] = (
             (df['value_sisepuede_tj'] - df['value_iea_tj']) / df['value_iea_tj']
         ).fillna(0)
 
-    ax1.plot(df['year'], df['value_iea_tj'], marker='o', label='IEA (observed)', color='steelblue')
-    ax1.plot(df['year'], df['value_sisepuede_tj'], marker='s', linestyle='--', label='SISEPUEDE', color='tomato')
+    # Melt for seaborn
+    df_melt = df.melt(id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
+                      var_name='source', value_name='value')
+    df_melt['source'] = df_melt['source'].map({'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'})
+
+    sns.lineplot(data=df_melt, x='year', y='value', hue='source', style='source',
+                 markers=['o', 's'], ax=ax1, palette=['steelblue', 'tomato'])
     ax1.set_ylabel('TJ')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
 
-    ax2.plot(df['year'], df[second_var], color='green', marker='x')
+    sns.lineplot(data=df, x='year', y=second_var, ax=ax2, color='green', marker='x')
     ax2.set_ylabel(second_label)
     ax2.grid(True, alpha=0.3)
 
-    ax3.plot(df['year'], df[third_var], color='purple', marker='^')
+    sns.lineplot(data=df, x='year', y=third_var, ax=ax3, color='purple', marker='^')
     ax3.set_ylabel(third_label)
     ax3.set_xlabel('Year')
     ax3.grid(True, alpha=0.3)
@@ -297,14 +303,14 @@ def plot_detailed_comparisons(
     df_comparison: pd.DataFrame,
     pairs: Union[Tuple[str, str], List[Tuple[str, str]]] = None,
     second_var: str = 'ratio_sisepuede_over_iea',
-    third_var: str = 'rel_error_iea',
+    third_var: str = 'perc_difference_sisepuede',
     second_label: str = 'Ratio SSP/IEA',
-    third_label: str = 'Relative Error IEA',
+    third_label: str = 'Rel Error IEA',
     country: str = '',
     max_pairs: int = 12,
 ) -> None:
     """
-    Plot detailed comparison for one or more (iea_balance, iea_product) pairs.
+    Plot detailed comparison for one or more (iea_balance, iea_product) pairs using Seaborn.
 
     - If `pairs` is a tuple, it is treated as a single entity.
     - If `pairs` is a list, each pair draws one 3-subplot figure.
@@ -358,7 +364,8 @@ def plot_detailed_comparisons(
             3, 1, sharex=True, figsize=(8, 10), gridspec_kw={'height_ratios': [2, 1, 1]}
         )
         _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
-        title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+        # title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+        title = f"{pair['balance_code']} x {pair['product_code']} - {pair['subsector']}"
         ax1.set_title(title, fontsize=10)
         fig.suptitle(f"Detailed Comparison — {country}", fontsize=12, y=0.98)
         plt.tight_layout()
@@ -368,14 +375,15 @@ def plot_detailed_comparisons(
         nrows = 3
         ncols = len(selected_pairs)
         fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 8), sharex='col', squeeze=False)
-        
+
         for i, pair in enumerate(selected_pairs):
             ax1, ax2, ax3 = axes[0, i], axes[1, i], axes[2, i]
             _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
             # Title on the top axis for each pair
-            title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+            # title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
+            title = f"{pair['balance_code']} x {pair['product_code']} - {pair['subsector']}"
             ax1.set_title(title, fontsize=9)
-        
+
         fig.suptitle(f"Detailed Comparisons — {country}", fontsize=12, y=0.98)
         plt.tight_layout()
         plt.show()
@@ -388,37 +396,37 @@ def plot_selected_comparisons(
     max_panels: int = 12,
 ) -> None:
     """
-    Plot SISEPUEDE vs IEA time series for selected pairs of balance and product identifiers.
-    
+    Plot SISEPUEDE vs IEA time series for selected pairs of balance and product identifiers using Seaborn.
+
     Each pair is a tuple (balance_identifier, product_identifier), where identifier can be
     either the code (e.g., 'INDUSTRY') or the name (e.g., 'Industry').
-    
+
     Infers sisepuede_subsector from the data and displays it in the plot title.
     """
     df = df_comparison.copy()
-    
+
     # Filter to pairs where we have at least one IEA observation
     df = df[df["value_iea_tj"].notna()]
-    
+
     selected_pairs = []
     for balance_id, product_id in pairs[:max_panels]:
         # Find matching rows
         mask_balance = (df["iea_balance_code"] == balance_id) | (df["iea_balance_name"] == balance_id)
         mask_product = (df["iea_product_code"] == product_id) | (df["iea_product_name"] == product_id)
         mask = mask_balance & mask_product
-        
+
         sub = df[mask]
         if sub.empty:
             print(f"No data found for pair: {balance_id}, {product_id}")
             continue
-        
+
         # Get unique values
         balance_code = sub["iea_balance_code"].unique()[0]
         balance_name = sub["iea_balance_name"].unique()[0]
         product_code = sub["iea_product_code"].unique()[0]
         product_name = sub["iea_product_name"].unique()[0]
         subsector = sub["sisepuede_subsector"].unique()[0] if "sisepuede_subsector" in sub.columns else "Unknown"
-        
+
         selected_pairs.append({
             "balance_code": balance_code,
             "balance_name": balance_name,
@@ -427,29 +435,34 @@ def plot_selected_comparisons(
             "subsector": subsector,
             "data": sub.sort_values("year")
         })
-    
+
     if not selected_pairs:
         print("No valid pairs to plot.")
         return
-    
+
     if len(selected_pairs) == 1:
         # Single plot
         pair = selected_pairs[0]
         fig, ax = plt.subplots(figsize=(8, 6))
-        
-        ax.plot(pair["data"]["year"], pair["data"]["value_iea_tj"],
-                marker="o", label="IEA (observed)", color="steelblue")
-        ax.plot(pair["data"]["year"], pair["data"]["value_sisepuede_tj"],
-                marker="s", linestyle="--", label="SISEPUEDE", color="tomato")
-        
-        title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
-                 f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
+
+        # Melt for seaborn
+        df_melt = pair["data"].melt(id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
+                                    var_name='source', value_name='value')
+        df_melt['source'] = df_melt['source'].map({'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'})
+
+        sns.lineplot(data=df_melt, x='year', y='value', hue='source', style='source',
+                     markers=['o', 's'], ax=ax, palette=['steelblue', 'tomato'])
+
+        # title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
+        #          f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
+        title = (f"{pair['balance_code']} x "
+                 f"{pair['product_code']} - {pair['subsector']}")
         ax.set_title(title, fontsize=10)
         ax.set_xlabel("Year")
         ax.set_ylabel("TJ")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
-        
+
         plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
         plt.tight_layout()
         plt.show()
@@ -459,26 +472,31 @@ def plot_selected_comparisons(
         nrows = int(np.ceil(len(selected_pairs) / ncols))
         fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows), squeeze=False)
         axes_flat = axes.flatten()
-        
+
         for i, pair in enumerate(selected_pairs):
             ax = axes_flat[i]
-            
-            ax.plot(pair["data"]["year"], pair["data"]["value_iea_tj"],
-                    marker="o", label="IEA (observed)", color="steelblue")
-            ax.plot(pair["data"]["year"], pair["data"]["value_sisepuede_tj"],
-                    marker="s", linestyle="--", label="SISEPUEDE", color="tomato")
-            
-            title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
-                     f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
+
+            # Melt for seaborn
+            df_melt = pair["data"].melt(id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
+                                        var_name='source', value_name='value')
+            df_melt['source'] = df_melt['source'].map({'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'})
+
+            sns.lineplot(data=df_melt, x='year', y='value', hue='source', style='source',
+                         markers=['o', 's'], ax=ax, palette=['steelblue', 'tomato'])
+
+            # title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
+            #          f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
+            title = (f"{pair['balance_code']} x "
+                     f"{pair['product_code']} - {pair['subsector']}")
             ax.set_title(title, fontsize=9)
             ax.set_xlabel("Year")
             ax.set_ylabel("TJ")
             ax.legend(fontsize=7)
             ax.grid(True, alpha=0.3)
-        
+
         for j in range(i + 1, len(axes_flat)):
             axes_flat[j].set_visible(False)
-        
+
         plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
         plt.tight_layout()
         plt.show()
@@ -492,7 +510,7 @@ def plot_metric_bar(
 ) -> None:
     """
     Create a bar plot showing a metric derived from the difference between SSP and IEA values
-    for a specific year, only for (balance, product) pairs that exist in both datasets.
+    for a specific year, only for (balance, product) pairs that exist in both datasets using Seaborn.
 
     Parameters:
     - df_comparison: DataFrame with comparison data, including 'year', 'value_sisepuede_tj', 'value_iea_tj',
@@ -503,14 +521,14 @@ def plot_metric_bar(
     """
     # Filter for the specified year
     df_year = df_comparison[df_comparison['year'] == year].copy()
-    
+
     # Filter for pairs with both SSP and IEA values
     df_both = df_year.dropna(subset=['value_sisepuede_tj', 'value_iea_tj'])
-    
+
     if df_both.empty:
         print(f"No data for year {year} with both SSP and IEA values.")
         return
-    
+
     # Compute the metric
     if metric == 'difference':
         df_both['metric_value'] = df_both['value_sisepuede_tj'] - df_both['value_iea_tj']
@@ -520,10 +538,13 @@ def plot_metric_bar(
         ylabel = 'Ratio (SSP / IEA)'
     elif metric == 'error':
         df_both['metric_value'] = ((df_both['value_sisepuede_tj'] - df_both['value_iea_tj']) / df_both['value_iea_tj']) * 100
-        ylabel = 'Relative Error (%)'
+        ylabel = 'Relative Error (SSP-IEA) / IEA (%)'
     else:
         raise ValueError("Metric must be 'difference', 'ratio', or 'error'")
-    
+
+    # Sort by metric value in descending order
+    df_both = df_both.sort_values('metric_value', ascending=False)
+
     # Create labels for the bars, including mapping quality when available
     if 'mapping_quality' in df_both.columns:
         df_both['mapping_quality'] = df_both['mapping_quality'].fillna('Unknown')
@@ -533,30 +554,30 @@ def plot_metric_bar(
         )
     else:
         df_both['label'] = df_both['iea_balance_code'] + ' - ' + df_both['iea_product_code']
-    
-    # Plot
+
+    # Plot using seaborn
     fig, ax = plt.subplots(figsize=(12, 8))
-    
+
     if orientation == 'vertical':
-        bars = ax.bar(range(len(df_both)), df_both['metric_value'], tick_label=df_both['label'])
+        sns.barplot(data=df_both, x='label', y='metric_value', ax=ax, palette='viridis')
         ax.set_ylabel(ylabel)
         ax.set_xlabel('Balance - Product Pair')
         plt.xticks(rotation=45, ha='right')
     else:
-        bars = ax.barh(range(len(df_both)), df_both['metric_value'], tick_label=df_both['label'])
+        sns.barplot(data=df_both, y='label', x='metric_value', ax=ax, palette='viridis', orient='h')
         ax.set_xlabel(ylabel)
         ax.set_ylabel('Balance - Product Pair')
-    
+
     ax.set_title(f'{metric.capitalize()} between SSP and IEA for {year}')
-    
+
     # Add value labels on the bars
-    for bar in bars:
+    for p in ax.patches:
         if orientation == 'vertical':
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height, f'{height:.2f}', ha='center', va='bottom')
+            ax.annotate(f'{p.get_height():.2f}', (p.get_x() + p.get_width() / 2., p.get_height()),
+                        ha='center', va='bottom', fontsize=10)
         else:
-            width = bar.get_width()
-            ax.text(width, bar.get_y() + bar.get_height()/2, f'{width:.2f}', ha='left', va='center')
-    
+            ax.annotate(f'{p.get_width():.2f}', (p.get_width(), p.get_y() + p.get_height() / 2.),
+                        ha='left', va='center', fontsize=10)
+
     plt.tight_layout()
     plt.show()
