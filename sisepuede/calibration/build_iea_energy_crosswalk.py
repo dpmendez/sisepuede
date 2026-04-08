@@ -279,7 +279,8 @@ class IEACrosswalkBuilder:
         """
         Build crosswalk rows for the Energy Supply section.
         IEA balance: INDPROD (Indigenous Production / Total Energy Supply).
-        SISEPUEDE variable: Fuel Production.
+        # SISEPUEDE variable: Fuel Production.
+        SISEPUEDE variable: Total Energy Demand by Fuel.
         """
 
         rows = self._section("ENERGY SUPPLY")
@@ -302,10 +303,11 @@ class IEACrosswalkBuilder:
             ),
             (
                 "OIL",      "Oil",
-                ["fuel_crude", "fuel_diesel", "fuel_gasoline", "fuel_oil", "fuel_kerosene", "fuel_hydrocarbon", "natural_gas_liquid"],
+                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
+                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
                 "sum", "approximate",
                 "IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} and natural_gas_liquid is the closest analog."
-                "HGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES",
+                "NGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES",
             ),
             (
                 "NUCLEAR",  "Nuclear",
@@ -407,12 +409,10 @@ class IEACrosswalkBuilder:
             ),
             (
                 "OIL", "Crude oil imports and exports",
-                ["fuel_crude", "fuel_diesel", "fuel_gasoline",
-                "fuel_hydrocarbon_gas_liquids", "fuel_kerosene",
-                "fuel_oil", "fuel_natural_gas_liquid"],
-                ["fuel_crude", "fuel_diesel", "fuel_gasoline",
-                "fuel_hydrocarbon_gas_liquids", "fuel_kerosene",
-                "fuel_oil", "fuel_natural_gas_liquid"],
+                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
+                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
+                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
+                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
                 "sum", "approximate",
                 "IEA Oil imports = crude + all refined products + NGLs; sum across SISEPUEDE liquid petroleum fuels",
                 "exportsadj tracks surplus supply; may undercount scheduled exports; sum across liquid petroleum fuels",
@@ -699,8 +699,8 @@ class IEACrosswalkBuilder:
             ),
             (
                 "OIL",     "Oil",
-                ["fuel_diesel", "fuel_gasoline", "fuel_kerosene",
-                 "fuel_oil", "fuel_crude"],
+                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
+                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
                 "sum", "approximate",
                 "IEA Oil = all liquid petroleum products",
             ),
@@ -790,8 +790,10 @@ class IEACrosswalkBuilder:
 
         for product_code, product_name, fuel_cats, agg in [
             ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",      "Oil products",      ["fuel_crude", "fuel_diesel", "fuel_gasoline",
-                                              "fuel_kerosene", "fuel_oil", ], "sum"),
+            ("OIL",      "Oil products",      ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel",
+                                               "fuel_gasoline", "fuel_kerosene", "fuel_hydrocarbon",
+                                               "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
+                                               "sum"),
             ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
             ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
             ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
@@ -849,8 +851,10 @@ class IEACrosswalkBuilder:
 
         for product_code, product_name, fuel_cats, agg in [
             ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",      "Oil products",      ["fuel_crude", "fuel_diesel", "fuel_gasoline",
-                                              "fuel_kerosene", "fuel_oil", ], "sum"),
+            ("OIL",      "Oil products",      ["fuel_crude", "fuel_coke", "fuel_oil",
+                                               "fuel_diesel", "fuel_gasoline", "fuel_kerosene",
+                                               "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
+                                               "sum"),
             ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
             ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
             ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
