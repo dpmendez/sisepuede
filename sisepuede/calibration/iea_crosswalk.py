@@ -435,3 +435,105 @@ class IEACrosswalk:
             .sort_values("mean_ratio", ascending = False)
             .reset_index(drop = True)
         )
+
+
+    def get_crosswalk_entry(self,
+        iea_balance_code: str,
+        iea_product_code: str,
+    ) -> Union[pd.Series, None]:
+        """Return the crosswalk row for a given (balance, product) pair, or None.
+
+        This is the primary lookup used by the calibration pipeline to get
+        everything it needs about one target in one call.
+
+        Function Arguments
+        ------------------
+        iea_balance_code : str
+            IEA balance code, e.g. "INDUSTRY", "TRANSPORT", "ELECTOUT".
+        iea_product_code : str
+            IEA product code, e.g. "COAL", "ELECTR", "TOTAL".
+
+        Returns
+        -------
+        pd.Series | None
+            A single crosswalk row with all columns, including:
+              ssp_fields           : List[str]  — SSP output column names (added)
+              unit_conversion_to_tj: float      — multiply SSP value to get TJ
+              aggregation          : str         — "direct" or "sum"
+              mapping_quality      : str         — "exact", "approximate", etc.
+            Returns None if no matching row is found.
+
+        Notes
+        -----
+        Unit alignment: SISEPUEDE energy outputs are in PJ; IEA data is in TJ.
+        unit_conversion_to_tj = 1000 for energy variables (1 PJ = 1000 TJ).
+        To compare SSP output against an IEA target in TJ:
+
+            ssp_value_tj = df_ssp[entry.ssp_fields].sum() * entry.unit_conversion_to_tj
+            iea_value_tj = df_iea_long["value_iea_tj"]
+
+        Or equivalently, to convert the IEA target to SSP units (PJ) before
+        passing to scale_inputs_single_value:
+
+            target_pj = iea_value_tj / entry.unit_conversion_to_tj
+        """
+        mask = (
+            (self.df_crosswalk["iea_balance_code"] == iea_balance_code)
+            & (self.df_crosswalk["iea_product_code"] == iea_product_code)
+        )
+        matches = self.df_crosswalk[mask]
+
+        if len(matches) == 0:
+            return None
+
+        row = matches.iloc[0].copy()
+
+        # Attach a parsed field list as a convenience attribute
+        raw = str(row.get("sisepuede_output_variables", ""))
+        row["ssp_fields"] = [
+            v.strip() for v in raw.split(_VAR_SEP) if v.strip()
+        ]
+
+        return row
+
+
+    def get_ssp_fields_for_target(self,
+        iea_balance_code: str,
+        iea_product_code: str,
+    ) -> List[str]:
+        """Return the SISEPUEDE output column names for a given IEA target pair.
+
+        This is the key link between the IEA (balance, product) target and the
+        SSP output dataframe: it answers "which SSP columns should I sum and
+        compare against this IEA value?"
+
+        Function Arguments
+        ------------------
+        iea_balance_code : str
+            IEA balance code, e.g. "INDUSTRY", "TRANSPORT", "ELECTOUT".
+        iea_product_code : str
+            IEA product code, e.g. "COAL", "ELECTR", "TOTAL".
+
+        Returns
+        -------
+        List[str]
+            SSP output column names. Empty list if no crosswalk entry exists.
+            Sum these columns (after multiplying by unit_conversion_to_tj)
+            to get the TJ value comparable to IEA.
+
+        Examples
+        --------
+            xw.get_ssp_fields_for_target("INDUSTRY", "COAL")
+            # → ["energy_demand_enfu_subsector_total_pj_inen_fuel_coal"]
+
+            xw.get_ssp_fields_for_target("TRANSPORT", "TRANSPORT")
+            # → ["energy_consumption_trns_total"]
+
+            xw.get_ssp_fields_for_target("ELECTOUT", "COAL")
+            # → ["nemomod_entc_annual_production_by_technology_pp_coal",
+            #    "nemomod_entc_annual_production_by_technology_pp_coal_ccs"]
+        """
+        entry = self.get_crosswalk_entry(iea_balance_code, iea_product_code)
+        if entry is None:
+            return []
+        return entry["ssp_fields"]
