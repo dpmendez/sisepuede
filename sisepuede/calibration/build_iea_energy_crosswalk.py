@@ -27,6 +27,8 @@ import os
 import pandas as pd
 from typing import *
 
+from sisepuede.calibration._iea_fuel_map import fuel_keys, agg_type
+
 
 
 ####################
@@ -291,68 +293,71 @@ class IEACrosswalkBuilder:
         for product_code, product_name, fuel_cats, agg, quality, notes in [
             (
                 "COAL",     "Coal",
-                ["fuel_coal"],
-                "direct", "approximate",
-                "IEA TES Coal aggregate; SISEPUEDE fuel_coal does not "
-                "distinguish hard vs. brown coal",
+                fuel_keys("COAL"),
+                agg_type("COAL"), "approximate",
+                "IEA TES Coal aggregate; includes fuel_coal + fuel_coke; "
+                "SISEPUEDE does not distinguish hard vs. brown coal",
             ),
             (
                 "NATGAS",   "Natural gas",
-                ["fuel_natural_gas"],
-                "direct", "exact", "",
+                fuel_keys("NATGAS"),
+                agg_type("NATGAS"), "exact", "",
             ),
             (
                 "OIL",      "Oil",
-                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
-                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                "sum", "approximate",
-                "IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} and natural_gas_liquid is the closest analog."
-                "NGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES",
+                fuel_keys("OIL"),
+                agg_type("OIL"), "approximate",
+                "IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} "
+                "and fuel_natural_gas_liquid is the closest analog. "
+                "NGLs (propane, butane, ethane, etc.) are extracted during natural gas "
+                "processing and classified under Oil in IEA's TES",
             ),
             (
                 "NUCLEAR",  "Nuclear",
-                ["fuel_nuclear"],
-                "direct", "exact", "",
+                fuel_keys("NUCLEAR"),
+                agg_type("NUCLEAR"), "exact", "",
             ),
             (
                 "HYDRO",    "Hydro",
-                ["fuel_water"],
-                "direct", "exact", "",
+                fuel_keys("HYDRO"),
+                agg_type("HYDRO"), "exact", "",
             ),
             (
                 "WINDSOLAR", "Wind solar etc.",
-                ["fuel_wind", "fuel_solar"],
-                "sum", "approximate",
+                fuel_keys("WINDSOLAR"),
+                agg_type("WINDSOLAR"), "approximate",
                 "IEA aggregates wind+solar+other renewables; "
                 "sum SISEPUEDE wind and solar",
             ),
             (
                 "BIOWASTE",  "Biofuels and waste",
-                ["fuel_biomass", "fuel_biogas", "fuel_biofuels", "fuel_waste"],
-                "sum", "approximate",
+                fuel_keys("BIOWASTE"),
+                agg_type("BIOWASTE"), "approximate",
                 "IEA aggregates all biofuels and waste; "
-                "sum SISEPUEDE biomass+biogas+biofuels+waste",
+                "sum SISEPUEDE biomass+solid_biomass+biogas+biofuels+waste",
             ),
             (
                 "GEOTHERM",  "Geothermal",
-                ["fuel_geothermal"],
-                "direct", "exact", "",
+                fuel_keys("GEOTHERM"),
+                agg_type("GEOTHERM"), "exact", "",
             ),
             (
-                "ELECT",  "Electricity",
-                ["fuel_electricity"],
-                "direct", "exact", "",
+                "ELECTR",  "Electricity",
+                fuel_keys("ELECTR"),
+                agg_type("ELECTR"), "exact", "",
             ),
             (
                 "HYDROGEN",  "Hydrogen",
-                ["fuel_hydrogen"],
-                "direct", "no_match", "IEA free-access TES has no hydrogen row; "
+                fuel_keys("HYDROGEN"),
+                agg_type("HYDROGEN"), "no_match",
+                "IEA free-access TES has no hydrogen row; "
                 "tracked only in premium datasets post-2022",
             ),
             (
                 "AMMONIA",  "Ammonia",
                 ["fuel_ammonia"],
-                "direct", "no_match", "Ammonia not tracked as energy carrier in IEA free-access TES data",
+                "direct", "no_match",
+                "Ammonia not tracked as energy carrier in IEA free-access TES data",
             ),
         ]:
             rows.append(self._row(
@@ -398,38 +403,36 @@ class IEACrosswalkBuilder:
 
         ##  PER-FUEL IMPORTS AND EXPORTS
 
-        for balance_prefix, balance_name, imp_cats, exp_cats, aggregation, quality, imp_notes, exp_notes in [
+        for balance_prefix, balance_name, imp_cats, exp_cats, iea_code, quality, imp_notes, exp_notes in [
             (
                 "COAL", "Coal imports and exports",
-                ["fuel_coal"],
-                ["fuel_coal"],
-                "direct", "exact",
+                fuel_keys("COAL"),
+                fuel_keys("COAL"),
+                "COAL", "exact",
                 "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
                 "OIL", "Crude oil imports and exports",
-                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
-                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
-                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                "sum", "approximate",
+                fuel_keys("OIL"),
+                fuel_keys("OIL"),
+                "OIL", "approximate",
                 "IEA Oil imports = crude + all refined products + NGLs; sum across SISEPUEDE liquid petroleum fuels",
                 "exportsadj tracks surplus supply; may undercount scheduled exports; sum across liquid petroleum fuels",
             ),
             (
                 "GAS", "Natural gas imports and exports",
-                ["fuel_natural_gas"],
-                ["fuel_natural_gas"],
-                "direct", "exact",
+                fuel_keys("NATGAS"),
+                fuel_keys("NATGAS"),
+                "NATGAS", "exact",
                 "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
                 "EL", "Electricity imports and exports",
-                ["fuel_electricity"],
-                ["fuel_electricity"],
-                "direct", "exact",
+                fuel_keys("ELECTR"),
+                fuel_keys("ELECTR"),
+                "ELECTR", "exact",
                 "",
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
@@ -439,14 +442,14 @@ class IEACrosswalkBuilder:
                 "IMPORTS", "Imports",
                 "enfu",
                 self._fields_for(imp_var, imp_cats),
-                aggregation, "PJ", 1000, quality, imp_notes,
+                agg_type(iea_code), "PJ", 1000, quality, imp_notes,
             ))
             rows.append(self._row(
                 f"{balance_prefix}EXPORTS", balance_name,
                 "EXPORTS", "Exports",
                 "enfu",
                 self._fields_for(exp_var, exp_cats),
-                aggregation, "PJ", 1000, quality, exp_notes,
+                agg_type(iea_code), "PJ", 1000, quality, exp_notes,
             ))
 
 
@@ -693,46 +696,45 @@ class IEACrosswalkBuilder:
         for product_code, product_name, fuel_cats, agg, quality, extra in [
             (
                 "COAL",    "Coal",
-                ["fuel_coal"],
-                "direct", "approximate",
-                "demand = consumption for solid fuels",
+                fuel_keys("COAL"),
+                agg_type("COAL"), "approximate",
+                "demand = consumption for solid fuels; includes coke",
             ),
             (
                 "OIL",     "Oil",
-                ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel", "fuel_gasoline",
-                 "fuel_kerosene", "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                "sum", "approximate",
+                fuel_keys("OIL"),
+                agg_type("OIL"), "approximate",
                 "IEA Oil = all liquid petroleum products",
             ),
             (
                 "NATGAS",  "Natural gas",
-                ["fuel_natural_gas"],
-                "direct", "approximate",
+                fuel_keys("NATGAS"),
+                agg_type("NATGAS"), "approximate",
                 "demand = consumption for gas",
             ),
             (
                 "ELECTR",  "Electricity",
-                ["fuel_electricity"],
-                "direct", "approximate",
+                fuel_keys("ELECTR"),
+                agg_type("ELECTR"), "approximate",
                 "both IEA and SISEPUEDE measure electricity at point of "
                 "delivery (comparable); energy_consumption_electricity_inen_total "
                 "is a true consumption var but carries no fuel label",
             ),
             (
                 "BIOWASTE", "Biofuels and waste",
-                ["fuel_biomass", "fuel_biogas", "fuel_biofuels", "fuel_waste"],
-                "sum", "approximate",
+                fuel_keys("BIOWASTE"),
+                agg_type("BIOWASTE"), "approximate",
                 "sum all biogenic fuels",
             ),
             (
                 "GEOTHERM", "Geothermal",
-                ["fuel_geothermal"],
-                "direct", "approximate", "",
+                fuel_keys("GEOTHERM"),
+                agg_type("GEOTHERM"), "approximate", "",
             ),
             (
                 "WINDSOLAR", "Wind solar etc.",
-                ["fuel_wind", "fuel_solar"],
-                "sum", "approximate",
+                fuel_keys("WINDSOLAR"),
+                agg_type("WINDSOLAR"), "approximate",
                 "rare in industry but included for completeness",
             ),
         ]:
@@ -788,17 +790,13 @@ class IEACrosswalkBuilder:
             "— cannot isolate residential"
         )
 
-        for product_code, product_name, fuel_cats, agg in [
-            ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",      "Oil products",      ["fuel_crude", "fuel_coke", "fuel_oil", "fuel_diesel",
-                                               "fuel_gasoline", "fuel_kerosene", "fuel_hydrocarbon",
-                                               "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                                               "sum"),
-            ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
-            ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
-            ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
-            ("BIOWASTE", "Biofuels and waste",["fuel_biomass", "fuel_biogas",
-                                              "fuel_biofuels"],        "sum"),
+        for product_code, product_name, fuel_cats in [
+            ("COAL",     "Coal",              fuel_keys("COAL")),
+            ("OIL",      "Oil products",      fuel_keys("OIL")),
+            ("NATGAS",   "Natural gas",       fuel_keys("NATGAS")),
+            ("ELECTR",   "Electricity",       fuel_keys("ELECTR")),
+            ("GEOTHERM", "Geothermal",        fuel_keys("GEOTHERM")),
+            ("BIOWASTE", "Biofuels and waste",fuel_keys("BIOWASTE")),
         ]:
             rows.append(self._row(
                 "RESIDENT",
@@ -806,7 +804,7 @@ class IEACrosswalkBuilder:
                 product_code, product_name,
                 "scoe",
                 self._fields_for(scoe_var, fuel_cats),
-                agg, "PJ", 1000, "partial", note_scoe,
+                agg_type(product_code), "PJ", 1000, "partial", note_scoe,
             ))
 
         return rows
@@ -849,17 +847,13 @@ class IEACrosswalkBuilder:
             "demand as residential rows — do not sum with residential"
         )
 
-        for product_code, product_name, fuel_cats, agg in [
-            ("COAL",     "Coal",              ["fuel_coal"],            "direct"),
-            ("OIL",      "Oil products",      ["fuel_crude", "fuel_coke", "fuel_oil",
-                                               "fuel_diesel", "fuel_gasoline", "fuel_kerosene",
-                                               "fuel_hydrocarbon", "fuel_hydrocarbon_gas_liquids", "natural_gas_liquid"],
-                                               "sum"),
-            ("NATGAS",   "Natural gas",       ["fuel_natural_gas"],     "direct"),
-            ("ELECTR",   "Electricity",       ["fuel_electricity"],     "direct"),
-            ("GEOTHERM", "Geothermal",        ["fuel_geothermal"],     "direct"),
-            ("BIOWASTE", "Biofuels and waste",["fuel_biomass", "fuel_biogas",
-                                              "fuel_biofuels"],        "sum"),
+        for product_code, product_name, fuel_cats in [
+            ("COAL",     "Coal",              fuel_keys("COAL")),
+            ("OIL",      "Oil products",      fuel_keys("OIL")),
+            ("NATGAS",   "Natural gas",       fuel_keys("NATGAS")),
+            ("ELECTR",   "Electricity",       fuel_keys("ELECTR")),
+            ("GEOTHERM", "Geothermal",        fuel_keys("GEOTHERM")),
+            ("BIOWASTE", "Biofuels and waste",fuel_keys("BIOWASTE")),
         ]:
             rows.append(self._row(
                 "COMMPUB",
@@ -867,7 +861,7 @@ class IEACrosswalkBuilder:
                 product_code, product_name,
                 "scoe",
                 self._fields_for(scoe_var, fuel_cats),
-                agg, "PJ", 1000, "partial", note_comm,
+                agg_type(product_code), "PJ", 1000, "partial", note_comm,
             ))
 
         return rows
