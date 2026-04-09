@@ -67,12 +67,28 @@ Typical usage
 Notes on simplex groups
 -----------------------
 Fuel-fraction variables (e.g. frac_inen_energy_cement_*) belong to simplex
-groups: within each industry category the fractions must sum to 1. Free
-scalar perturbation breaks this constraint.
+groups: within each industry category the fractions must sum to 1.
 
-This version applies scalar scaling regardless. The VariableSpec fields
-`is_simplex_group` and `simplex_group_id` are included as forward-compatible
-markers - they are not yet acted on. Simplex-aware perturbation should be added in the future.
+Simplex-aware perturbation is implemented via perturb_inputs_simplex():
+  - Scale the focal column by scale_factor (clamped to [0, 1]).
+  - Redistribute the gained/lost mass proportionally across all other columns
+    that share the same category prefix (e.g. frac_inen_energy_cement_*).
+  - Co-constrained columns are inferred automatically from the column name
+    without requiring ModelAttributes.
+
+For OAT: only one simplex variable is non-unity per run, so the redistribution
+is unambiguous.
+
+For LHS: multiple simplex variables in the same constraint may have non-unity
+scale factors simultaneously.  All scale factors are applied at once via
+simultaneous renormalization (Aitchison perturbation):
+
+    desired_i  = original_i × scale_i   for every column in the constraint
+    final_i    = desired_i  / sum(desired)
+
+Columns not in the spec list act as background (scale = 1.0).  This is
+order-independent and gives each variable's Spearman score a clean
+single-variable interpretation.
 """
 
 import time
@@ -110,13 +126,14 @@ class VariableSpec:
         Upper bound for the scale factor.
         E.g. 1.2 -> the variable can be increased by up to 20 %.
     is_simplex_group : bool
-        Informational flag. If True this variable is part of a simplex group
-        (fuel fractions that must sum to 1 within a category).
-        Simplex-aware perturbation is NOT yet implemented — free scalar
-        scaling is applied regardless.
+        If True, this variable is part of a simplex group (fuel fractions
+        that must sum to 1 within a category).  When True,
+        perturb_inputs_simplex() is used instead of simple scalar scaling so
+        that the constraint is preserved.
     simplex_group_id : int | None
         Group ID from ModelAttributes.dict_field_to_simplex_group.
-        Stored alongside is_simplex_group for future use.
+        Informational; co-constrained columns are resolved at perturbation
+        time by prefix matching rather than by this ID.
     """
     column: str
     lb: float = 0.8
@@ -203,6 +220,207 @@ def perturb_inputs(
     return df_out
 
 
+def _get_simplex_column_group(df: pd.DataFrame, column: str) -> List[str]:
+    """Return all columns in df that are co-constrained with column.
+
+    For SISEPUEDE fuel-fraction columns the naming convention is:
+        frac_{subsector}_energy_{category}_{fuel}
+
+    The simplex constraint binds all columns that share the same
+    (subsector, category) prefix — i.e. everything before the last '_'.
+    This function infers that prefix and returns all matching column names.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame whose columns are searched.
+    column : str
+        A fuel-fraction column name, e.g. "frac_inen_energy_cement_coal".
+
+    Returns
+    -------
+    List[str]
+        All columns (sorted) whose names start with the same category prefix,
+        including column itself.  Returns [column] if no prefix match is found.
+
+    Examples
+    --------
+    _get_simplex_column_group(df, "frac_inen_energy_cement_coal")
+    # -> ["frac_inen_energy_cement_coal", "frac_inen_energy_cement_diesel",
+    #     "frac_inen_energy_cement_electricity", ...]
+    """
+    parts = column.rsplit("_", 1)
+    if len(parts) != 2:
+        return [column]
+    prefix = parts[0] + "_"
+    matches = sorted(c for c in df.columns if c.startswith(prefix))
+    return matches if matches else [column]
+
+
+def perturb_inputs_simplex(
+    df: pd.DataFrame,
+    focal_column: str,
+    scale_factor: float,
+    simplex_columns: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Perturb one fuel-fraction column while preserving the simplex sum = 1.
+
+    Scales `focal_column` by `scale_factor`, clamps to [0, 1], then
+    proportionally adjusts all other co-constrained columns so that their
+    per-row sum remains 1.0.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        SISEPUEDE input DataFrame.
+    focal_column : str
+        The fuel-fraction column to scale (e.g. "frac_inen_energy_cement_coal").
+    scale_factor : float
+        Multiplier applied to focal_column before clamping.
+        Values > 1.0 shift mass toward the focal fuel.
+        Values < 1.0 shift mass away from it.
+    simplex_columns : List[str] | None
+        All columns in this simplex constraint (must include focal_column).
+        If None, inferred automatically via _get_simplex_column_group().
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of df with focal_column and co-constrained columns adjusted.
+
+    Raises
+    ------
+    ValueError
+        If focal_column is not in df.
+    """
+    if focal_column not in df.columns:
+        raise ValueError(
+            f"perturb_inputs_simplex: column '{focal_column}' not found in DataFrame."
+        )
+
+    if simplex_columns is None:
+        simplex_columns = _get_simplex_column_group(df, focal_column)
+
+    other_cols = [c for c in simplex_columns if c != focal_column]
+
+    df_out = df.copy()
+    original_focal = df_out[focal_column].values.astype(float)
+
+    # Desired new focal value, clamped to [0, 1]
+    new_focal = np.clip(original_focal * scale_factor, 0.0, 1.0)
+    delta = new_focal - original_focal   # >0 = take mass from others; <0 = give mass back
+
+    if not other_cols:
+        df_out[focal_column] = new_focal
+        return df_out
+
+    other_vals = df_out[other_cols].values.astype(float)   # (n_rows, n_other)
+    other_sum  = other_vals.sum(axis=1)                     # (n_rows,)
+
+    # Cap delta so no column goes below 0
+    # When delta > 0 (focal grows): cap at how much mass is available in others
+    # When delta < 0 (focal shrinks): cap at how much focal itself can give
+    max_gain = other_sum
+    max_loss = original_focal
+    delta = np.where(delta > 0,
+                     np.minimum(delta,  max_gain),
+                     np.maximum(delta, -max_loss))
+
+    # Proportional redistribution weights across other columns
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.where(
+            other_sum[:, None] > 1e-10,
+            other_vals / other_sum[:, None],
+            np.full((len(other_sum), len(other_cols)), 1.0 / len(other_cols)),
+        )
+
+    df_out[focal_column] = original_focal + delta
+    for i, col in enumerate(other_cols):
+        df_out[col] = np.clip(other_vals[:, i] - delta * weights[:, i], 0.0, None)
+
+    return df_out
+
+
+def apply_perturbations(
+    df: pd.DataFrame,
+    specs: List[VariableSpec],
+    variable_scales: Dict[str, float],
+) -> pd.DataFrame:
+    """Apply perturbations to df, routing scalar and simplex specs correctly.
+
+    Scalar specs (is_simplex_group=False) are handled by perturb_inputs() —
+    each column is independently multiplied by its scale factor.
+
+    Simplex specs (is_simplex_group=True) are handled via simultaneous
+    renormalization (Aitchison perturbation): for every simplex constraint
+    that has at least one non-unity scale factor, all columns in that
+    constraint are scaled together and then renormalized so the row sum
+    remains 1.0.  Columns not in the spec list act as background (scale=1.0).
+    This is order-independent and keeps each variable's Spearman score
+    interpretable as a single-variable effect.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        SISEPUEDE input DataFrame (baseline).
+    specs : List[VariableSpec]
+        Full spec list for this run (used to determine constraint type per column).
+    variable_scales : Dict[str, float]
+        {column_name: scale_factor} for this particular run.
+
+    Returns
+    -------
+    pd.DataFrame
+        Perturbed copy of df.
+    """
+    spec_map: Dict[str, VariableSpec] = {s.column: s for s in specs}
+
+    # ── 1. Scalar perturbations (all at once) ────────────────────────────────
+    scalar_scales = {
+        col: scale
+        for col, scale in variable_scales.items()
+        if col in spec_map and not spec_map[col].is_simplex_group
+    }
+    df_out = perturb_inputs(df, scalar_scales) if scalar_scales else df.copy()
+
+    # ── 2. Simplex perturbations (simultaneous renormalization per constraint) ─
+    # Group simplex specs by their category prefix so each constraint is
+    # handled in one pass.
+    simplex_specs = [
+        s for s in specs
+        if s.is_simplex_group and abs(variable_scales.get(s.column, 1.0) - 1.0) > 1e-9
+    ]
+
+    if simplex_specs:
+        # Build {prefix: [specs]} — one entry per distinct simplex constraint
+        prefix_to_specs: Dict[str, List[VariableSpec]] = {}
+        for spec in simplex_specs:
+            parts = spec.column.rsplit("_", 1)
+            prefix = (parts[0] + "_") if len(parts) == 2 else spec.column
+            prefix_to_specs.setdefault(prefix, []).append(spec)
+
+        for prefix, grp_specs in prefix_to_specs.items():
+            # All columns in this simplex constraint (including background fuels)
+            all_cols = _get_simplex_column_group(df_out, grp_specs[0].column)
+            if not all_cols:
+                continue
+
+            # Scale vector: spec columns use their sampled factor; others use 1.0
+            scale_for_col = {c: 1.0 for c in all_cols}
+            for spec in grp_specs:
+                scale_for_col[spec.column] = variable_scales.get(spec.column, 1.0)
+
+            # Desired = original × scale, then renormalize rows to sum = 1
+            original  = df_out[all_cols].values.astype(float)
+            scale_vec = np.array([scale_for_col[c] for c in all_cols])
+            desired   = original * scale_vec          # broadcast over rows
+            row_sums  = desired.sum(axis=1, keepdims=True)
+            row_sums  = np.where(row_sums > 1e-10, row_sums, 1.0)  # guard /0
+            df_out[all_cols] = desired / row_sums
+
+    return df_out
+
+
 def sample_oat(
     specs: List[VariableSpec],
     levels: List[float] = None,
@@ -233,9 +451,7 @@ def sample_oat(
     rows = [{c: 1.0 for c in cols}]       # baseline row
 
     for spec in specs:
-        print(spec)
         for level in levels:
-            print(level)
             row = {c: 1.0 for c in cols}
             row[spec.column] = level
             rows.append(row)
@@ -440,8 +656,18 @@ class SensitivityRunner:
     def _run_single(
         self,
         variable_scales: Dict[str, float],
+        specs: Optional[List[VariableSpec]] = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Run the model once with the given scale factors.
+
+        Parameters
+        ----------
+        variable_scales : Dict[str, float]
+            {column: scale_factor} for this run.
+        specs : List[VariableSpec] | None
+            Full spec list.  When provided, simplex-constrained variables are
+            perturbed via perturb_inputs_simplex() instead of plain scaling.
+            When None, all variables are scaled independently.
 
         Returns
         -------
@@ -449,7 +675,10 @@ class SensitivityRunner:
             df_out  : full model output with year column attached
             df_comp : output of IEACrosswalk.build_comparison() (all years)
         """
-        df_in   = perturb_inputs(self.df_baseline, variable_scales)
+        if specs is not None:
+            df_in = apply_perturbations(self.df_baseline, specs, variable_scales)
+        else:
+            df_in = perturb_inputs(self.df_baseline, variable_scales)
         if isinstance(self.models, SISEPUEDEModels):
             df_out  = self.models.project(
                 df_in,
@@ -510,7 +739,7 @@ class SensitivityRunner:
             )
             t0 = time.time()
 
-            df_out, df_comp = self._run_single(variable_scales)
+            df_out, df_comp = self._run_single(variable_scales, specs=specs)
 
             df_out          = df_out.copy()
             df_out.insert(0, "run_index", run_idx)
@@ -618,8 +847,8 @@ def sensitivity_scores(
     Spearman r ∈ [-1, 1]:
       |r| close to 1 -> strong monotone influence
       |r| close to 0 -> weak or no influence
-      r > 0           -> increasing the variable increases the IEA ratio
-      r < 0           -> increasing the variable decreases the IEA ratio
+      r > 0          -> increasing the variable increases the IEA ratio
+      r < 0          -> increasing the variable decreases the IEA ratio
 
     Parameters
     ----------
@@ -687,7 +916,7 @@ def linearity_check(
     iea_balance_code: str,
     iea_product_code: str,
     years: List[int],
-    output_col: str = "ratio_sisepuede_over_iea",
+    output_col: str = "rel_err_iea",
 ):
     """Scatter plot to check whether the input->output relationship is linear.
 
@@ -772,8 +1001,8 @@ def linearity_check(
     ax.scatter(x_v, y_v, alpha=0.7, edgecolors="k", linewidths=0.4, zorder=3)
     ax.plot(x_fit, y_fit, color="C1", linewidth=1.8,
             label=f"Linear fit  R2 = {r2:.3f}")
-    ax.axhline(1.0, color="grey", linewidth=0.9, linestyle="--",
-               label="ratio = 1  (perfect match)")
+    ax.axhline(0.0, color="grey", linewidth=0.9, linestyle="--",
+               label="error = 0  (perfect match)")
     ax.set_xlabel(f"Scale factor:  {var_column}", fontsize=9)
     ax.set_ylabel(output_col, fontsize=9)
     ax.set_title(
