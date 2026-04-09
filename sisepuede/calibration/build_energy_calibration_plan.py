@@ -1,0 +1,552 @@
+"""
+sisepuede/calibration/build_energy_calibration_plan.py
+
+build_energy_calibration_plan()
+---------------------------------
+Factory that builds a CalibrationPlan for SISEPUEDE energy calibration,
+matching the grouping structure below (one section per row):
+
+  Row  Input variables               IEA target (crosswalk)
+  ───  ────────────────────────────  ────────────────────────────────────────────
+  1    consumpinit, scalar           Total Final Energy Consumption (by subsector)
+  2    all fuel-mix fracs, imports   Total Energy Supply (by fuel)
+  3    frac_enfu_demand_imported,    Energy Imports and Exports (by fuel)
+       exports_enfu
+  4    frac_trns_fuelmix_{mode}      Transport energy by fuel
+  5    nemomod_entc_residual,        Electricity Generation Sources (by fuel)
+       nemomod_entc_frac_msp
+  6    frac_inen_energy_{cat}        Industry TFC by source (by fuel)
+  7    frac_scoe_residential         Residential TFC by fuel
+  8    frac_scoe_commercial_muni     Commercial/public TFC by fuel
+
+Groups 1–5 target aggregate IEA pairs (INDPROD x fuel, TFC x TOTAL, sector x sector,
+ELECTOUT x fuel, COALIMPORTS x IMPORTS, …).  Groups 6–8 target fuel-mix pairs
+(INDUSTRY x COAL, RESIDENT x ELECTR, …) and use simplex-constrained fracs.
+
+IEA fuel aggregation
+---------------------
+Multiple SISEPUEDE fuels map to a single IEA fuel code (see _IEA_FUEL_MAP).
+This determines which variables are bundled in the same group.  For example,
+diesel + gasoline + kerosene + oil + crude + hydrocarbon_gas_liquids all map
+to IEA "OIL", so the INDUSTRY x OIL group contains frac_inen_energy_*_diesel,
+frac_inen_energy_*_gasoline, etc.
+
+Usage
+------
+    from sisepuede.calibration.build_energy_calibration_plan import (
+        build_energy_calibration_plan,
+    )
+
+    plan = build_energy_calibration_plan(model_attributes)
+    plan.summary()
+
+    # Sector-by-sector
+    for sector, sub in plan.by_sector().items():
+        specs   = sub.get_specs()
+        targets = sub.get_targets()
+
+    # Bulk LHS
+    result = runner.run_lhs(plan.get_specs(), n_samples=100)
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Set, Tuple
+
+from sisepuede.calibration.calibration_group import CalibrationGroup, CalibrationPlan
+from sisepuede.calibration.sensitivity import VariableSpec
+from sisepuede.calibration._iea_fuel_map import IEA_FUEL_MAP, FUEL_SUFFIX_TO_IEA
+
+#  Local aliases to avoid changing call sites below
+_IEA_FUEL_MAP = IEA_FUEL_MAP
+_FUEL_TO_IEA  = FUEL_SUFFIX_TO_IEA
+
+#  Import/export balance prefixes used in the crosswalk
+#  Maps IEA fuel group -> (import_balance, export_balance)
+_IEA_TRADE_BALANCES: Dict[str, Tuple[str, str]] = {
+    "COAL":   ("COALIMPORTS",   "COALEXPORTS"),
+    "OIL":    ("OILIMPORTS",    "OILEXPORTS"),
+    "NATGAS": ("GASIMPORTS",    "GASEXPORTS"),
+    "ELECTR": ("ELIMPORTS",     "ELEXPORTS"),
+    #  Total-energy trade (all fuels combined)
+    "ALL":    ("IMPORTS",       "EXPORTS"),
+}
+
+
+##########################
+#    MAIN FACTORY        #
+##########################
+
+def build_energy_calibration_plan(
+    model_attributes,
+    lb: float = 0.5,
+    ub: float = 2.0,
+) -> CalibrationPlan:
+    """Build the full energy CalibrationPlan for one SISEPUEDE country run.
+
+    Scans model_attributes for all relevant input variable names and groups
+    them into CalibrationGroups following the eight-row structure in the
+    module docstring.
+
+    Parameters
+    ----------
+    model_attributes : ModelAttributes
+        SISEPUEDE ModelAttributes object.
+    lb : float
+        Default lower-bound scale factor for VariableSpec (applied to all
+        scalar groups).  Default 0.5 (+- 50 %).
+    ub : float
+        Default upper-bound scale factor.
+
+    Returns
+    -------
+    CalibrationPlan
+        One group per calibration target x sector or fuel combination.
+        Groups are ordered: TFC -> TES -> Imports/Exports -> Transport fuel ->
+        ENTC -> Industry fuel -> Residential fuel -> Commercial fuel.
+    """
+    fields_in: Set[str] = set(model_attributes.all_variable_fields_input)
+    plan = CalibrationPlan()
+
+    ##  Attribute tables
+    inen_cats  = model_attributes.get_attribute_table(model_attributes.subsec_name_inen).key_values
+    scoe_cats  = model_attributes.get_attribute_table(model_attributes.subsec_name_scoe).key_values
+    trns_modes = model_attributes.get_attribute_table(model_attributes.subsec_name_trns).key_values
+    enfu_keys  = model_attributes.get_attribute_table(model_attributes.subsec_name_enfu).key_values
+
+    # Simplex group IDs (for fuel-fraction simplex groups in inen/trns/scoe)
+    dict_simplex: Dict[str, int] = getattr(
+        model_attributes, "dict_field_to_simplex_group", {}
+    ) or {}
+
+    # ------------------------------------------------------------------ #
+    #  ROW 1 – Total Final Energy Consumption, by subsector              #
+    #  Inputs: consumpinit_*, scalar_inen_energy_demand_*                #
+    #  One group per sector (inen, trns, scoex3)                         #
+    # ------------------------------------------------------------------ #
+
+    ##  1a. INEN total
+    inen_consump = [
+        f for f in fields_in
+        if f.startswith("consumpinit_inen_")
+    ]
+    inen_scalar = [
+        f for f in fields_in
+        if f.startswith("scalar_inen_energy_demand_")
+    ]
+    plan.add(CalibrationGroup(
+        name        = "industry__industry",
+        sector      = "inen",
+        specs       = _make_specs(inen_consump + inen_scalar, lb, ub),
+        iea_targets = [("INDUSTRY", "INDUSTRY"), ("TFC", "TOTAL")],
+        notes       = "Initial energy intensity + demand scalars for all INEN categories -> "
+                      "drives total industry TFC (INDUSTRY x INDUSTRY).",
+    ))
+
+    ##  1b. TRNS total
+    trns_demand = [
+        f for f in fields_in
+        if any(f.startswith(p) for p in [
+            "fuelefficiency_trns_", "avgload_trns_", "occrate_trns_",
+            "elecfuelefficiency_trns_",
+        ])
+    ]
+    plan.add(CalibrationGroup(
+        name        = "transport__transport",
+        sector      = "trns",
+        specs       = _make_specs(trns_demand, lb, ub),
+        iea_targets = [("TRANSPORT", "TRANSPORT"), ("TFC", "TOTAL")],
+        notes       = "Fuel efficiency, average load, and occupancy rates for all "
+                      "transport modes -> drives total transport TFC (TRANSPORT x TRANSPORT).",
+    ))
+
+    ##  1c–1e. SCOE total, one sub-group per SCOE category
+    _SCOE_CAT_TO_IEA: Dict[str, Tuple[str, str]] = {
+        "residential":         ("RESIDENT",  "RESIDENT"),
+        "commercial_municipal":("COMMPUB",   "COMMPUB"),
+        "other_se":            ("AGRICULT",  "AGRICULT"),
+    }
+    for scoe_cat, iea_target in _SCOE_CAT_TO_IEA.items():
+        scoe_consump = [
+            f for f in fields_in
+            if f.startswith("consumpinit_scoe_") and scoe_cat in f
+        ]
+        bal, prod = iea_target
+        plan.add(CalibrationGroup(
+            name        = f"{bal.lower()}__{prod.lower()}",
+            sector      = "scoe",
+            specs       = _make_specs(scoe_consump, lb, ub),
+            iea_targets = [iea_target, ("TFC", "TOTAL")],
+            notes       = f"Initial per-household / per-GDP consumption for SCOE "
+                          f"{scoe_cat} -> drives {iea_target[0]}x{iea_target[1]}.",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 2 – Total Energy Supply, by fuel                              #
+    #  Inputs: cross-sector fuel fracs + import fraction                 #
+    #  One group per IEA fuel code                                       #
+    #                                                                    #
+    #  Note: SISEPUEDE computes domestic production as a residual of     #
+    #  total demand minus imports.  There is no explicit "production"    #
+    #  input.  The variables that most directly drive TES-per-fuel are   #
+    #  the fuel-fraction inputs from ALL sectors (inen, trns, scoe)      #
+    #  together with the import fraction for that fuel.  These overlap   #
+    #  with groups in rows 4/6/7/8; de-duplication in get_specs() is     #
+    #  applied when using the plan in bulk mode.                         #
+    # ------------------------------------------------------------------ #
+
+    for iea_fuel, fuel_suffixes in _IEA_FUEL_MAP.items():
+        tes_vars: List[str] = []
+
+        ##  Import fraction for this fuel group
+        for suf in fuel_suffixes:
+            imp_var = f"frac_enfu_fuel_demand_imported_pj_fuel_{suf}"
+            if imp_var in fields_in:
+                tes_vars.append(imp_var)
+
+        ##  INEN fuel fracs
+        for cat in inen_cats:
+            for suf in fuel_suffixes:
+                v = f"frac_inen_energy_{cat}_{suf}"
+                if v in fields_in:
+                    tes_vars.append(v)
+
+        ##  TRNS fuel fracs
+        for mode in trns_modes:
+            for suf in fuel_suffixes:
+                v = f"frac_trns_fuelmix_{mode}_{suf}"
+                if v in fields_in:
+                    tes_vars.append(v)
+
+        ##  SCOE fuel fracs (residential, commercial, other_se)
+        for scoe_cat in scoe_cats:
+            for suf in fuel_suffixes:
+                v = f"frac_scoe_heat_energy_{scoe_cat}_{suf}"
+                if v in fields_in:
+                    tes_vars.append(v)
+
+        if not tes_vars:
+            continue
+
+        plan.add(CalibrationGroup(
+            name        = f"indprod__{iea_fuel.lower()}",
+            sector      = ["inen", "trns", "scoe", "enfu"],
+            specs       = _make_specs(tes_vars, lb, ub),
+            iea_targets = [("INDPROD", iea_fuel)],
+            notes       = f"All fuel-fraction inputs (inen+trns+scoe) and import "
+                          f"fraction for {iea_fuel} -> drives TES (INDPRODx{iea_fuel}).  "
+                          f"Overlaps with rows 4/6/7/8; variables are de-duplicated "
+                          f"when plan is used in bulk mode.",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 3 – Energy Imports and Exports, by fuel                       #
+    #  Inputs: frac_enfu_fuel_demand_imported, exports_enfu              #
+    #  One group per fuel per direction (import / export)                #
+    # ------------------------------------------------------------------ #
+
+    for iea_fuel, (bal_imp, bal_exp) in _IEA_TRADE_BALANCES.items():
+        fuel_suffixes = (
+            _IEA_FUEL_MAP.get(iea_fuel, [])
+            if iea_fuel != "ALL"
+            else list(_FUEL_TO_IEA.keys())    # all fuels
+        )
+
+        ##  Import fraction variables
+        imp_vars = [
+            f"frac_enfu_fuel_demand_imported_pj_fuel_{suf}"
+            for suf in fuel_suffixes
+            if f"frac_enfu_fuel_demand_imported_pj_fuel_{suf}" in fields_in
+        ]
+        if imp_vars:
+            plan.add(CalibrationGroup(
+                name        = f"{bal_imp.lower()}__imports",
+                sector      = "enfu",
+                specs       = _make_specs(imp_vars, lb=0.0, ub=1.0),
+                iea_targets = [(bal_imp, "IMPORTS")],
+                notes       = f"Fraction of total {iea_fuel} demand met by imports "
+                              f"-> {bal_imp}xIMPORTS.  Bounds [0, 1] (fraction).",
+            ))
+
+        ##  Export volume variables
+        exp_vars = [
+            f"exports_enfu_pj_fuel_{suf}"
+            for suf in fuel_suffixes
+            if f"exports_enfu_pj_fuel_{suf}" in fields_in
+        ]
+        if exp_vars:
+            plan.add(CalibrationGroup(
+                name        = f"{bal_exp.lower()}__exports",
+                sector      = "enfu",
+                specs       = _make_specs(exp_vars, lb, ub),
+                iea_targets = [(bal_exp, "EXPORTS")],
+                notes       = f"Scheduled export volumes for {iea_fuel} fuels "
+                              f"-> {bal_exp}xEXPORTS.",
+            ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 4 – Transport energy by fuel balance                          #
+    #  Inputs: frac_trns_fuelmix_{mode}_{fuel}  [simplex within mode]    #
+    #  One group per IEA fuel code                                       #
+    # ------------------------------------------------------------------ #
+
+    ##  IEA fuel targets available for transport (from crosswalk)
+    _TRNS_IEA_TARGETS: Dict[str, str] = {
+        "OIL":      ("TRANSPORT", "OIL"),
+        "ELECTR":   ("TRANSPORT", "ELECTR"),
+        "NATGAS":   ("TRANSPORT", "NATGAS"),
+        "BIOWASTE": ("TRANSPORT", "BIOWASTE"),
+        "HYDROGEN": ("TRANSPORT", "HYDROGEN"),
+    }
+
+    for iea_fuel, target in _TRNS_IEA_TARGETS.items():
+        fuel_suffixes = _IEA_FUEL_MAP.get(iea_fuel, [])
+        trns_vars: List[str] = []
+        simplex_ids: List[int] = []
+        ids_seen: Set[int] = set()
+
+        for mode in trns_modes:
+            for suf in fuel_suffixes:
+                v = f"frac_trns_fuelmix_{mode}_{suf}"
+                if v in fields_in:
+                    trns_vars.append(v)
+                    gid = dict_simplex.get(v)
+                    if gid is not None and gid not in ids_seen:
+                        ids_seen.add(gid)
+                        simplex_ids.append(gid)
+
+        if not trns_vars:
+            continue
+
+        specs = _make_specs(trns_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        bal, prod = target
+        plan.add(CalibrationGroup(
+            name              = f"{bal.lower()}__{prod.lower()}",
+            sector            = "trns",
+            specs             = specs,
+            iea_targets       = [target],
+            constraint_type   = "simplex",
+            simplex_group_ids = simplex_ids,
+            notes             = f"Fuel mix fraction for {iea_fuel} across all transport "
+                                f"modes -> {target[0]}x{target[1]}.  Simplex within each "
+                                f"mode (fracs sum to 1 per mode).",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 5 – Electricity Generation Sources                            #
+    #  Inputs: nemomod_entc_residual_capacity_pp_*,                      #
+    #          nemomod_entc_frac_min_share_production_pp_*               #
+    #  One group per IEA fuel code (power plant technology)              #
+    # ------------------------------------------------------------------ #
+
+    #  Technology suffix -> IEA fuel code
+    _ENTC_TECH_TO_IEA: Dict[str, str] = {
+        "pp_coal":              "COAL",
+        "pp_coal_ccs":          "COAL",
+        "pp_gas":               "NATGAS",
+        "pp_gas_ccs":           "NATGAS",
+        "pp_oil":               "OIL",
+        "pp_nuclear":           "NUCLEAR",
+        "pp_hydropower":        "HYDRO",
+        "pp_wind":              "WIND",
+        "pp_solar":             "SOLARPV",
+        "pp_biomass":           "BIOFUEL",
+        "pp_biogas":            "BIOFUEL",
+        "pp_waste_incineration":"WASTE",
+        "pp_geothermal":        "GEOTHERM",
+        "pp_ocean":             "TIDE",
+    }
+
+    ##  Collect entc vars per IEA fuel
+    entc_by_iea: Dict[str, List[str]] = {}
+    _ENTC_PREFIXES = [
+        "nemomod_entc_residual_capacity_",
+        "nemomod_entc_frac_min_share_production_",
+        "nemomod_entc_total_annual_max_capacity_",
+        "nemomod_entc_total_annual_min_capacity_",
+        "nemomod_entc_scalar_availability_factor_",
+    ]
+    for tech, iea_fuel in _ENTC_TECH_TO_IEA.items():
+        for prefix in _ENTC_PREFIXES:
+            # Variables may be named {prefix}{tech} or {prefix}{tech}_gw etc.
+            matching = [
+                f for f in fields_in
+                if f.startswith(f"{prefix}{tech}")
+            ]
+            for v in matching:
+                entc_by_iea.setdefault(iea_fuel, []).append(v)
+
+    for iea_fuel, entc_vars in sorted(entc_by_iea.items()):
+        plan.add(CalibrationGroup(
+            name        = f"electout__{iea_fuel.lower()}",
+            sector      = "entc",
+            specs       = _make_specs(list(dict.fromkeys(entc_vars)), lb, ub),
+            iea_targets = [("ELECTOUT", iea_fuel)],
+            notes       = f"Residual capacity, MSP, and capacity bounds for "
+                          f"{iea_fuel} power plant technologies -> ELECTOUTx{iea_fuel}.",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 6 – Industry TFC by source                                    #
+    #  Inputs: frac_inen_energy_{cat}_{fuel}  [simplex within each cat]  #
+    #  One group per IEA fuel code                                       #
+    # ------------------------------------------------------------------ #
+
+    ##  IEA fuel targets for industry from crosswalk
+    _INEN_IEA_TARGETS: Dict[str, Tuple[str, str]] = {
+        "COAL":     ("INDUSTRY", "COAL"),
+        "OIL":      ("INDUSTRY", "OIL"),
+        "NATGAS":   ("INDUSTRY", "NATGAS"),
+        "ELECTR":   ("INDUSTRY", "ELECTR"),
+        "BIOWASTE": ("INDUSTRY", "BIOWASTE"),
+        "GEOTHERM": ("INDUSTRY", "GEOTHERM"),
+        "WINDSOLAR":("INDUSTRY", "WINDSOLAR"),
+    }
+
+    for iea_fuel, target in _INEN_IEA_TARGETS.items():
+        fuel_suffixes = _IEA_FUEL_MAP.get(iea_fuel, [])
+        inen_vars: List[str] = []
+        simplex_ids: List[int] = []
+        ids_seen: Set[int] = set()
+
+        for cat in inen_cats:
+            for suf in fuel_suffixes:
+                v = f"frac_inen_energy_{cat}_{suf}"
+                if v in fields_in:
+                    inen_vars.append(v)
+                    gid = dict_simplex.get(v)
+                    if gid is not None and gid not in ids_seen:
+                        ids_seen.add(gid)
+                        simplex_ids.append(gid)
+
+        if not inen_vars:
+            continue
+
+        specs = _make_specs(inen_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        bal, prod = target
+        plan.add(CalibrationGroup(
+            name              = f"{bal.lower()}__{prod.lower()}",
+            sector            = "inen",
+            specs             = specs,
+            iea_targets       = [target],
+            constraint_type   = "simplex",
+            simplex_group_ids = simplex_ids,
+            notes             = f"Fuel fraction for {iea_fuel} across all INEN "
+                                f"categories -> {target[0]}x{target[1]}.  Simplex "
+                                f"within each industry category (fracs sum to 1 per cat).",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 7 – Residential TFC by fuel                                   #
+    #  Inputs: frac_scoe_heat_energy_residential_{fuel}  [simplex]       #
+    # ------------------------------------------------------------------ #
+
+    _SCOE_IEA_TARGETS: Dict[str, Tuple[str, str]] = {
+        "COAL":     ("RESIDENT", "COAL"),
+        "OIL":      ("RESIDENT", "OIL"),
+        "NATGAS":   ("RESIDENT", "NATGAS"),
+        "ELECTR":   ("RESIDENT", "ELECTR"),
+        "BIOWASTE": ("RESIDENT", "BIOWASTE"),
+    }
+
+    for iea_fuel, target in _SCOE_IEA_TARGETS.items():
+        fuel_suffixes = _IEA_FUEL_MAP.get(iea_fuel, [])
+        res_vars: List[str] = []
+        simplex_ids: List[int] = []
+        ids_seen: Set[int] = set()
+
+        for suf in fuel_suffixes:
+            v = f"frac_scoe_heat_energy_residential_{suf}"
+            if v in fields_in:
+                res_vars.append(v)
+                gid = dict_simplex.get(v)
+                if gid is not None and gid not in ids_seen:
+                    ids_seen.add(gid)
+                    simplex_ids.append(gid)
+
+        if not res_vars:
+            continue
+
+        specs = _make_specs(res_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        bal, prod = target
+        plan.add(CalibrationGroup(
+            name              = f"{bal.lower()}__{prod.lower()}",
+            sector            = "scoe",
+            specs             = specs,
+            iea_targets       = [target],
+            constraint_type   = "simplex",
+            simplex_group_ids = simplex_ids,
+            notes             = f"Residential heat-energy fuel fraction for {iea_fuel} "
+                                f"-> {target[0]}x{target[1]}.  Simplex (all residential "
+                                f"fuel fracs sum to 1).",
+        ))
+
+    # ------------------------------------------------------------------ #
+    #  ROW 8 – Commercial/public TFC by fuel                             #
+    #  Inputs: frac_scoe_heat_energy_commercial_municipal_{fuel}         #
+    # ------------------------------------------------------------------ #
+
+    _SCOE_COMM_IEA_TARGETS: Dict[str, Tuple[str, str]] = {
+        "COAL":     ("COMMPUB", "COAL"),
+        "OIL":      ("COMMPUB", "OIL"),
+        "NATGAS":   ("COMMPUB", "NATGAS"),
+        "ELECTR":   ("COMMPUB", "ELECTR"),
+        "BIOWASTE": ("COMMPUB", "BIOWASTE"),
+    }
+
+    for iea_fuel, target in _SCOE_COMM_IEA_TARGETS.items():
+        fuel_suffixes = _IEA_FUEL_MAP.get(iea_fuel, [])
+        comm_vars: List[str] = []
+        simplex_ids: List[int] = []
+        ids_seen: Set[int] = set()
+
+        for suf in fuel_suffixes:
+            v = f"frac_scoe_heat_energy_commercial_municipal_{suf}"
+            if v in fields_in:
+                comm_vars.append(v)
+                gid = dict_simplex.get(v)
+                if gid is not None and gid not in ids_seen:
+                    ids_seen.add(gid)
+                    simplex_ids.append(gid)
+
+        if not comm_vars:
+            continue
+
+        specs = _make_specs(comm_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        bal, prod = target
+        plan.add(CalibrationGroup(
+            name              = f"{bal.lower()}__{prod.lower()}",
+            sector            = "scoe",
+            specs             = specs,
+            iea_targets       = [target],
+            constraint_type   = "simplex",
+            simplex_group_ids = simplex_ids,
+            notes             = f"Commercial/public heat-energy fuel fraction for "
+                                f"{iea_fuel} -> {target[0]}x{target[1]}.  Simplex.",
+        ))
+
+    return plan
+
+
+##########################
+#    INTERNAL HELPERS    #
+##########################
+
+def _make_specs(
+    columns: List[str],
+    lb: float,
+    ub: float,
+    simplex_ids: Optional[Dict[str, int]] = None,
+) -> List[VariableSpec]:
+    """Build a VariableSpec per column, optionally marking simplex members."""
+    specs = []
+    for col in columns:
+        gid = simplex_ids.get(col) if simplex_ids else None
+        specs.append(VariableSpec(
+            column           = col,
+            lb               = lb,
+            ub               = ub,
+            is_simplex_group = gid is not None,
+            simplex_group_id = gid,
+        ))
+    return specs
