@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 from sisepuede.calibration.sensitivity import VariableSpec
+from sisepuede.calibration._simplex_registry import SimplexRegistry
 
 
 ##########################
@@ -523,6 +524,7 @@ class CalibrationPlan:
         cls,
         spec_dict: Dict[str, Dict],
         model_attributes=None,
+        simplex_registry: Optional[SimplexRegistry] = None,
     ) -> "CalibrationPlan":
         """Build a CalibrationPlan from a plain configuration dictionary.
 
@@ -538,11 +540,16 @@ class CalibrationPlan:
               "constraint_type" : "scalar" | "simplex"     (default "scalar")
               "notes"           : str                       (optional "")
         model_attributes : ModelAttributes | None
-            When provided and a group has constraint_type="simplex", the
-            simplex_group_ids are auto-populated from
-            ModelAttributes.dict_field_to_simplex_group and the
-            is_simplex_group / simplex_group_id fields on each VariableSpec
-            are set in-place.
+            When provided (and `simplex_registry` is None), a SimplexRegistry
+            is built from it and used to auto-populate simplex metadata on
+            the specs.  Ignored if `simplex_registry` is supplied directly.
+        simplex_registry : SimplexRegistry | None
+            Authoritative registry of simplex-group membership.  When a group
+            has constraint_type="simplex", each spec's is_simplex_group /
+            simplex_group_id are populated from this registry and the group's
+            simplex_group_ids list is derived from it.  A simplex group whose
+            columns are not in the registry raises KeyError — we refuse to
+            silently produce a plan whose simplex bookkeeping would be wrong.
 
         Returns
         -------
@@ -572,12 +579,9 @@ class CalibrationPlan:
                 model_attributes = model_attributes,
             )
         """
-        ##  Build the dict_field_to_simplex_group lookup once
-        dict_simplex: Dict[str, int] = {}
-        if model_attributes is not None:
-            dict_simplex = getattr(
-                model_attributes, "dict_field_to_simplex_group", {}
-            ) or {}
+        ##  Resolve the simplex registry once
+        if simplex_registry is None and model_attributes is not None:
+            simplex_registry = SimplexRegistry.from_model_attributes(model_attributes)
 
         groups: List[CalibrationGroup] = []
 
@@ -587,16 +591,26 @@ class CalibrationPlan:
 
             ##  For simplex groups: auto-annotate specs and collect group IDs
             simplex_ids: List[int] = []
-            if constraint == "simplex" and dict_simplex:
+            if constraint == "simplex":
+                if simplex_registry is None:
+                    raise ValueError(
+                        f"CalibrationGroup '{name}' has constraint_type='simplex' "
+                        "but no simplex_registry (or model_attributes) was provided. "
+                        "Simplex metadata cannot be populated without the registry."
+                    )
+                simplex_registry.validate_columns(
+                    [s.column for s in specs],
+                    context=f"CalibrationGroup '{name}'",
+                )
                 ids_seen: Set[int] = set()
                 for spec in specs:
-                    gid = dict_simplex.get(spec.column)
-                    if gid is not None:
-                        spec.is_simplex_group  = True
-                        spec.simplex_group_id  = gid
-                        if gid not in ids_seen:
-                            ids_seen.add(gid)
-                            simplex_ids.append(gid)
+                    gid = simplex_registry.group_id(spec.column)
+                    # validate_columns above guarantees gid is not None
+                    spec.is_simplex_group = True
+                    spec.simplex_group_id = gid
+                    if gid not in ids_seen:
+                        ids_seen.add(gid)
+                        simplex_ids.append(gid)
 
             groups.append(CalibrationGroup(
                 name              = name,

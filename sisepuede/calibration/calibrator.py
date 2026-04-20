@@ -92,6 +92,26 @@ from typing import Dict, List, Optional, Tuple
 
 from sisepuede.calibration.calibration_group import CalibrationGroup, CalibrationPlan
 from sisepuede.calibration.sensitivity import VariableSpec, apply_perturbations
+from sisepuede.calibration._simplex_registry import SimplexRegistry
+
+
+def _resolve_registry(models, crosswalk) -> SimplexRegistry:
+    """Derive a SimplexRegistry from whatever context is available.
+
+    Searched in order:
+        1. models.model_attributes
+        2. crosswalk.model_attributes
+        3. empty registry
+
+    An empty registry is only safe for calibration plans that contain no
+    simplex groups. If a simplex group is encountered and the registry is
+    empty, apply_perturbations will raise a clear error at use time.
+    """
+    for src in (models, crosswalk):
+        matt = getattr(src, "model_attributes", None)
+        if matt is not None:
+            return SimplexRegistry.from_model_attributes(matt)
+    return SimplexRegistry.empty()
 
 
 ##########################
@@ -115,6 +135,12 @@ class Calibrator:
     include_energy_production : bool
         Pass True only when calibrating ENTC variables that require the Julia
         EnergyProduction back-end. Default False (consumption-only model).
+    simplex_registry : SimplexRegistry | None
+        Authoritative lookup for simplex-group membership.  When None, the
+        calibrator derives one from `models.model_attributes` (or
+        `crosswalk.model_attributes` as a fallback).  Pass one explicitly
+        when running in contexts where no ModelAttributes object is
+        available (e.g. surrogate-based calibration).
     """
 
     def __init__(
@@ -124,6 +150,7 @@ class Calibrator:
         df_iea_long: pd.DataFrame,
         year_target: int,
         include_energy_production: bool = False,
+        simplex_registry: Optional[SimplexRegistry] = None,
     ) -> None:
 
         self.models                    = models
@@ -131,6 +158,11 @@ class Calibrator:
         self.df_iea_long               = df_iea_long.copy()
         self.year_target               = year_target
         self.include_energy_production = include_energy_production
+        self.simplex_registry          = (
+            simplex_registry
+            if simplex_registry is not None
+            else _resolve_registry(models, crosswalk)
+        )
 
         # Pre-extract all IEA values for year_target once.
         # Keys: (iea_balance_code, iea_product_code) -> value in TJ.
@@ -241,17 +273,22 @@ class Calibrator:
 
         return float(df_out.loc[mask, available].sum(axis=1).iloc[0])
 
-    @staticmethod
-    def _is_frac_group(group: CalibrationGroup) -> bool:
-        """Return True if ANY of the group's columns is a fuel-fraction variable.
+    def _is_simplex_constrained_group(self, group: CalibrationGroup) -> bool:
+        """Return True if any column in `group` is part of a simplex group.
 
         Decision: Row 2 of build_energy_calibration_plan contains scalar groups
-        whose knobs are frac_* variables (fuel fractions that are simplex-
-        constrained). Treating them as freely scalable would violate the
-        simplex constraint (fracs must sum to 1 per category). We skip these
-        in Phase 1 — their targets are reached indirectly through Phase 2.
+        whose knobs are simplex-constrained variables (fuel fractions that
+        must sum to 1 per category). Treating them as freely scalable would
+        violate the simplex constraint. We skip these in Phase 1 — their
+        targets are reached indirectly through Phase 2.
+
+        Membership is resolved authoritatively from the SimplexRegistry, not
+        by inspecting column name prefixes. This is robust to variable
+        renaming and to groups whose names do not start with "frac_".
         """
-        return any(col.startswith("frac_") for col in group.columns)
+        return any(
+            self.simplex_registry.is_simplex(col) for col in group.columns
+        )
 
     # ------------------------------------------------------------------
     #   Phase 1 — calibrate sector totals (scalar groups)
@@ -295,9 +332,10 @@ class Calibrator:
 
         for group in plan.scalar_groups():
 
-            # Skip groups that use frac_* knobs (simplex variables — handled in Phase 2)
-            if self._is_frac_group(group):
-                log.append({"group": group.name, "phase": 1, "status": "skipped_frac_group"})
+            # Skip groups whose knobs are simplex-constrained (handled in Phase 2).
+            # Membership comes from the SimplexRegistry, not from name inspection.
+            if self._is_simplex_constrained_group(group):
+                log.append({"group": group.name, "phase": 1, "status": "skipped_simplex_group"})
                 continue
 
             # Calibrate to the first iea_target (primary target of this group).
@@ -463,7 +501,7 @@ class Calibrator:
                 # Fuel is essentially absent in the model but IEA says it should
                 # have a non-zero share. Scaling from zero is undefined — skip.
                 warnings.warn(
-                    f"Phase 2 — group '{group.name}': current share ~ 0 for "
+                    f"Phase 2 — group '{group.name}': current share ≈ 0 for "
                     f"({bal}, {prod}) but IEA target share = {target_share:.4f}. "
                     "Cannot scale from zero. Skipping."
                 )
@@ -515,10 +553,15 @@ class Calibrator:
 
         # ── 3. Apply all simplex perturbations simultaneously ────────────────
         # apply_perturbations applies Aitchison renormalization per simplex
-        # constraint (all frac_* columns sharing the same category prefix are
-        # renormalized together so they continue to sum to 1). This is
+        # constraint, using self.simplex_registry to look up which columns
+        # are co-constrained (the authoritative mapping from ModelAttributes,
+        # not an inference from column names). All columns in each group are
+        # renormalized together so they continue to sum to 1. This is
         # order-independent and gives a clean, constraint-preserving result.
-        df_out_calibrated = apply_perturbations(df_in, specs_dedup, variable_scales)
+        df_out_calibrated = apply_perturbations(
+            df_in, specs_dedup, variable_scales,
+            simplex_registry=self.simplex_registry,
+        )
 
         return df_out_calibrated, log
 
@@ -554,13 +597,15 @@ class Calibrator:
         log : List[dict]
             Per-iteration, per-group record of scale factors and status codes.
             Status codes:
-              "ok"                       — applied successfully
-              "skipped_frac_group"       — Phase 1 skipped Row 2 groups
-              "skipped_no_iea"           — IEA value missing for this target/year
-              "skipped_no_ssp_fields"    — crosswalk has no mapping for this pair
-              "skipped_zero_current"     — model output was 0 (can't compute ratio)
+              "ok"                         — applied successfully
+              "skipped_simplex_group"      — Phase 1 skipped a group whose knobs
+                                             are simplex-constrained (handled in
+                                             Phase 2)
+              "skipped_no_iea"             — IEA value missing for this target/year
+              "skipped_no_ssp_fields"      — crosswalk has no mapping for this pair
+              "skipped_zero_current"       — model output was 0 (can't compute ratio)
               "skipped_zero_current_share" — fuel absent in model, can't scale from 0
-              "skipped_no_iea_total"     — sector total missing from IEA data
+              "skipped_no_iea_total"       — sector total missing from IEA data
         """
         time_period = self._get_time_period(df_in)
         df          = df_in.copy()

@@ -69,12 +69,17 @@ Notes on simplex groups
 Fuel-fraction variables (e.g. frac_inen_energy_cement_*) belong to simplex
 groups: within each industry category the fractions must sum to 1.
 
+Which columns are co-constrained is resolved through a SimplexRegistry
+(see sisepuede/calibration/_simplex_registry.py), which is a thin facade
+over ModelAttributes.dict_field_to_simplex_group / dict_simplex_group_to_fields
+— i.e. the same attribute-table CSVs that define the model.  Nothing in this
+module infers simplex membership from column names; the registry is the
+single source of truth.
+
 Simplex-aware perturbation is implemented via perturb_inputs_simplex():
   - Scale the focal column by scale_factor (clamped to [0, 1]).
   - Redistribute the gained/lost mass proportionally across all other columns
-    that share the same category prefix (e.g. frac_inen_energy_cement_*).
-  - Co-constrained columns are inferred automatically from the column name
-    without requiring ModelAttributes.
+    in the same simplex group (looked up from the registry).
 
 For OAT: only one simplex variable is non-unity per run, so the redistribution
 is unambiguous.
@@ -83,7 +88,7 @@ For LHS: multiple simplex variables in the same constraint may have non-unity
 scale factors simultaneously.  All scale factors are applied at once via
 simultaneous renormalization (Aitchison perturbation):
 
-    desired_i  = original_i × scale_i   for every column in the constraint
+    desired_i  = original_i x scale_i   for every column in the constraint
     final_i    = desired_i  / sum(desired)
 
 Columns not in the spec list act as background (scale = 1.0).  This is
@@ -98,6 +103,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 from sisepuede.manager.sisepuede_models import SISEPUEDEModels
+from sisepuede.calibration._simplex_registry import SimplexRegistry
 
 try:
     from scipy.stats.qmc import LatinHypercube
@@ -131,9 +137,12 @@ class VariableSpec:
         perturb_inputs_simplex() is used instead of simple scalar scaling so
         that the constraint is preserved.
     simplex_group_id : int | None
-        Group ID from ModelAttributes.dict_field_to_simplex_group.
-        Informational; co-constrained columns are resolved at perturbation
-        time by prefix matching rather than by this ID.
+        Group ID from ModelAttributes.dict_field_to_simplex_group.  This is
+        the authoritative identifier used to look up the column's simplex
+        siblings (via a SimplexRegistry) — not informational.  When
+        is_simplex_group is True, simplex_group_id must be populated and
+        consistent with the registry used at perturbation time.  Populate
+        automatically with CalibrationPlan.from_specs_dict(model_attributes=...).
     """
     column: str
     lb: float = 0.8
@@ -220,48 +229,12 @@ def perturb_inputs(
     return df_out
 
 
-def _get_simplex_column_group(df: pd.DataFrame, column: str) -> List[str]:
-    """Return all columns in df that are co-constrained with column.
-
-    For SISEPUEDE fuel-fraction columns the naming convention is:
-        frac_{subsector}_energy_{category}_{fuel}
-
-    The simplex constraint binds all columns that share the same
-    (subsector, category) prefix — i.e. everything before the last '_'.
-    This function infers that prefix and returns all matching column names.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame whose columns are searched.
-    column : str
-        A fuel-fraction column name, e.g. "frac_inen_energy_cement_coal".
-
-    Returns
-    -------
-    List[str]
-        All columns (sorted) whose names start with the same category prefix,
-        including column itself.  Returns [column] if no prefix match is found.
-
-    Examples
-    --------
-    _get_simplex_column_group(df, "frac_inen_energy_cement_coal")
-    # -> ["frac_inen_energy_cement_coal", "frac_inen_energy_cement_diesel",
-    #     "frac_inen_energy_cement_electricity", ...]
-    """
-    parts = column.rsplit("_", 1)
-    if len(parts) != 2:
-        return [column]
-    prefix = parts[0] + "_"
-    matches = sorted(c for c in df.columns if c.startswith(prefix))
-    return matches if matches else [column]
-
-
 def perturb_inputs_simplex(
     df: pd.DataFrame,
     focal_column: str,
     scale_factor: float,
     simplex_columns: Optional[List[str]] = None,
+    simplex_registry: Optional[SimplexRegistry] = None,
 ) -> pd.DataFrame:
     """Perturb one fuel-fraction column while preserving the simplex sum = 1.
 
@@ -281,7 +254,12 @@ def perturb_inputs_simplex(
         Values < 1.0 shift mass away from it.
     simplex_columns : List[str] | None
         All columns in this simplex constraint (must include focal_column).
-        If None, inferred automatically via _get_simplex_column_group().
+        When None, looked up from `simplex_registry`.  Exactly one of
+        `simplex_columns` or `simplex_registry` must be provided.
+    simplex_registry : SimplexRegistry | None
+        Authoritative registry of simplex-group membership.  If supplied,
+        the co-constrained columns for `focal_column` are read from the
+        registry rather than inferred from column names.
 
     Returns
     -------
@@ -291,7 +269,8 @@ def perturb_inputs_simplex(
     Raises
     ------
     ValueError
-        If focal_column is not in df.
+        If focal_column is not in df, or if neither simplex_columns nor
+        simplex_registry is provided.
     """
     if focal_column not in df.columns:
         raise ValueError(
@@ -299,7 +278,18 @@ def perturb_inputs_simplex(
         )
 
     if simplex_columns is None:
-        simplex_columns = _get_simplex_column_group(df, focal_column)
+        if simplex_registry is None:
+            raise ValueError(
+                "perturb_inputs_simplex: must supply either simplex_columns "
+                "(explicit list) or simplex_registry (SimplexRegistry built "
+                "from ModelAttributes).  Naming-based inference is no longer "
+                "supported."
+            )
+        simplex_columns = simplex_registry.co_constrained_with(focal_column)
+        # Restrict to columns actually present in the DataFrame
+        simplex_columns = [c for c in simplex_columns if c in df.columns]
+        if focal_column not in simplex_columns:
+            simplex_columns = [focal_column] + simplex_columns
 
     other_cols = [c for c in simplex_columns if c != focal_column]
 
@@ -345,6 +335,7 @@ def apply_perturbations(
     df: pd.DataFrame,
     specs: List[VariableSpec],
     variable_scales: Dict[str, float],
+    simplex_registry: Optional[SimplexRegistry] = None,
 ) -> pd.DataFrame:
     """Apply perturbations to df, routing scalar and simplex specs correctly.
 
@@ -354,10 +345,16 @@ def apply_perturbations(
     Simplex specs (is_simplex_group=True) are handled via simultaneous
     renormalization (Aitchison perturbation): for every simplex constraint
     that has at least one non-unity scale factor, all columns in that
-    constraint are scaled together and then renormalized so the row sum
-    remains 1.0.  Columns not in the spec list act as background (scale=1.0).
-    This is order-independent and keeps each variable's Spearman score
-    interpretable as a single-variable effect.
+    constraint (as defined by the SimplexRegistry) are scaled together and
+    then renormalized so the row sum remains 1.0.  Columns not in the spec
+    list act as background (scale=1.0).  This is order-independent and
+    keeps each variable's Spearman score interpretable as a single-variable
+    effect.
+
+    Simplex-group membership is resolved authoritatively from the supplied
+    `simplex_registry` (a wrapper over ModelAttributes.dict_field_to_simplex_group).
+    There is no name-based fallback: if a spec has is_simplex_group=True but
+    no registry is provided, the function raises.
 
     Parameters
     ----------
@@ -367,11 +364,21 @@ def apply_perturbations(
         Full spec list for this run (used to determine constraint type per column).
     variable_scales : Dict[str, float]
         {column_name: scale_factor} for this particular run.
+    simplex_registry : SimplexRegistry | None
+        Registry of simplex-group membership.  Required whenever any spec has
+        is_simplex_group=True.
 
     Returns
     -------
     pd.DataFrame
         Perturbed copy of df.
+
+    Raises
+    ------
+    ValueError
+        If any simplex spec is present but no simplex_registry is provided,
+        or if a simplex spec references a column that the registry does not
+        recognise.
     """
     spec_map: Dict[str, VariableSpec] = {s.column: s for s in specs}
 
@@ -384,39 +391,70 @@ def apply_perturbations(
     df_out = perturb_inputs(df, scalar_scales) if scalar_scales else df.copy()
 
     # ── 2. Simplex perturbations (simultaneous renormalization per constraint) ─
-    # Group simplex specs by their category prefix so each constraint is
-    # handled in one pass.
+    # Collect only simplex specs whose scale is actually non-unity.
     simplex_specs = [
         s for s in specs
         if s.is_simplex_group and abs(variable_scales.get(s.column, 1.0) - 1.0) > 1e-9
     ]
 
-    if simplex_specs:
-        # Build {prefix: [specs]} — one entry per distinct simplex constraint
-        prefix_to_specs: Dict[str, List[VariableSpec]] = {}
-        for spec in simplex_specs:
-            parts = spec.column.rsplit("_", 1)
-            prefix = (parts[0] + "_") if len(parts) == 2 else spec.column
-            prefix_to_specs.setdefault(prefix, []).append(spec)
+    if not simplex_specs:
+        return df_out
 
-        for prefix, grp_specs in prefix_to_specs.items():
-            # All columns in this simplex constraint (including background fuels)
-            all_cols = _get_simplex_column_group(df_out, grp_specs[0].column)
-            if not all_cols:
-                continue
+    if simplex_registry is None:
+        raise ValueError(
+            "apply_perturbations: simplex specs are present but no "
+            "simplex_registry was supplied.  Build one with "
+            "SimplexRegistry.from_model_attributes(model_attributes) and pass "
+            "it as the simplex_registry argument."
+        )
 
-            # Scale vector: spec columns use their sampled factor; others use 1.0
-            scale_for_col = {c: 1.0 for c in all_cols}
-            for spec in grp_specs:
+    # Group simplex specs by their authoritative simplex group ID.
+    group_to_specs: Dict[int, List[VariableSpec]] = {}
+    unknown: List[str] = []
+    for spec in simplex_specs:
+        gid = simplex_registry.group_id(spec.column)
+        if gid is None:
+            unknown.append(spec.column)
+            continue
+        # Cross-check spec metadata if populated
+        if spec.simplex_group_id is not None and spec.simplex_group_id != gid:
+            raise ValueError(
+                f"apply_perturbations: spec for '{spec.column}' claims "
+                f"simplex_group_id={spec.simplex_group_id} but the registry "
+                f"says {gid}.  VariableSpec metadata and ModelAttributes are "
+                "out of sync — rebuild the plan with the current ModelAttributes."
+            )
+        group_to_specs.setdefault(gid, []).append(spec)
+
+    if unknown:
+        raise ValueError(
+            "apply_perturbations: the following columns are marked "
+            f"is_simplex_group=True but are not registered in any simplex "
+            f"group (check ModelAttributes): {unknown}"
+        )
+
+    for gid, grp_specs in group_to_specs.items():
+        # All columns in this simplex constraint, per the registry.
+        # Restrict to columns that actually exist in df_out so we never read
+        # missing values.
+        all_cols = [c for c in simplex_registry.columns_in_group(gid)
+                    if c in df_out.columns]
+        if not all_cols:
+            continue
+
+        # Scale vector: spec columns use their sampled factor; others use 1.0
+        scale_for_col = {c: 1.0 for c in all_cols}
+        for spec in grp_specs:
+            if spec.column in scale_for_col:
                 scale_for_col[spec.column] = variable_scales.get(spec.column, 1.0)
 
-            # Desired = original × scale, then renormalize rows to sum = 1
-            original  = df_out[all_cols].values.astype(float)
-            scale_vec = np.array([scale_for_col[c] for c in all_cols])
-            desired   = original * scale_vec          # broadcast over rows
-            row_sums  = desired.sum(axis=1, keepdims=True)
-            row_sums  = np.where(row_sums > 1e-10, row_sums, 1.0)  # guard /0
-            df_out[all_cols] = desired / row_sums
+        # Desired = original x scale, then renormalize rows to sum = 1
+        original  = df_out[all_cols].values.astype(float)
+        scale_vec = np.array([scale_for_col[c] for c in all_cols])
+        desired   = original * scale_vec          # broadcast over rows
+        row_sums  = desired.sum(axis=1, keepdims=True)
+        row_sums  = np.where(row_sums > 1e-10, row_sums, 1.0)  # guard /0
+        df_out[all_cols] = desired / row_sums
 
     return df_out
 
@@ -506,6 +544,26 @@ def sample_lhs(
     return pd.DataFrame(scaled, columns=cols).reset_index(drop=True)
 
 
+def _resolve_registry(models, iea_crosswalk) -> SimplexRegistry:
+    """Best-effort derivation of a SimplexRegistry from whatever context is available.
+
+    Searched in order:
+        1. models.model_attributes
+        2. iea_crosswalk.model_attributes
+        3. empty registry (no simplex groups known)
+
+    The empty fallback is safe for scalar-only workflows: it only becomes a
+    problem when a simplex spec is encountered, at which point
+    apply_perturbations raises a clear error asking the caller to pass a
+    registry explicitly.
+    """
+    for src in (models, iea_crosswalk):
+        matt = getattr(src, "model_attributes", None)
+        if matt is not None:
+            return SimplexRegistry.from_model_attributes(matt)
+    return SimplexRegistry.empty()
+
+
 ###########################
 #    SENSITIVITY RUNNER   #
 ###########################
@@ -552,6 +610,12 @@ class SensitivityRunner:
     year_max : int | None
         If given, passed to IEACrosswalk.build_comparison() so that both
         frames are trimmed to year <= year_max before joining.
+    simplex_registry : SimplexRegistry | None
+        Authoritative lookup for simplex-group membership.  If not provided,
+        the runner will try to build one from `models.model_attributes`; if
+        that is not available (e.g. when running against a surrogate), the
+        runner will fall back to an empty registry and raise at perturbation
+        time if any simplex specs are encountered.
     """
 
     def __init__(
@@ -564,6 +628,7 @@ class SensitivityRunner:
         include_energy_production: bool = False,
         year_min: Optional[int] = None,
         year_max: Optional[int] = None,
+        simplex_registry: Optional[SimplexRegistry] = None,
     ) -> None:
 
         self.models                   = models
@@ -574,6 +639,11 @@ class SensitivityRunner:
         self.include_energy_production = include_energy_production
         self.year_min                 = year_min
         self.year_max                 = year_max
+        self.simplex_registry         = (
+            simplex_registry
+            if simplex_registry is not None
+            else _resolve_registry(models, iea_crosswalk)
+        )
 
         # lazily computed and cached
         self._baseline_output         = None
@@ -676,7 +746,10 @@ class SensitivityRunner:
             df_comp : output of IEACrosswalk.build_comparison() (all years)
         """
         if specs is not None:
-            df_in = apply_perturbations(self.df_baseline, specs, variable_scales)
+            df_in = apply_perturbations(
+                self.df_baseline, specs, variable_scales,
+                simplex_registry=self.simplex_registry,
+            )
         else:
             df_in = perturb_inputs(self.df_baseline, variable_scales)
         if isinstance(self.models, SISEPUEDEModels):
