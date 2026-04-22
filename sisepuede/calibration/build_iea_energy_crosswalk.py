@@ -585,24 +585,6 @@ class IEACrosswalkBuilder:
         ))
         rows.append({k: None for k in _COLS})
 
-        ##  TFC TOTAL (multi-subsector sum)
-
-        tfc_total_fields = (
-            self._fields_for("Total Energy Consumption from Industrial Energy")
-            + self._fields_for("Total Energy Consumption from SCOE")
-            + self._fields_for("Total Energy Consumption from Transportation")
-            + self._fields_for("Total Energy Consumption from CCSQ")
-        )
-        rows.append(self._row(
-            "TFC", "Total final energy consumption",
-            "TOTAL", "Total",
-            "multi",
-            tfc_total_fields,
-            "sum", "PJ", 1000, "approximate",
-            "SISEPUEDE TFC excludes non-energy use and transformation "
-            "sector own-use; slight undercount expected",
-        ))
-
         ##  SCOE sub-category fields — filter by sub-category suffix
 
         scoe_cat_fields = self._fields_for("Energy Consumption from SCOE")

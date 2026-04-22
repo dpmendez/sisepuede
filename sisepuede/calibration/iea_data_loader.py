@@ -636,31 +636,6 @@ class IEADataLoader:
         df_all = pd.concat(frames, ignore_index = True)
         df_all.insert(0, "iso_alpha_3", iso)
 
-        ##  Compute TFC TOTAL: sum the 5 sector rows already loaded from
-        ##  total_final_energy_consumption (Non-energy use and Non-specified
-        ##  are excluded by the parser, so the sum is already correct).
-
-        _TFC_BALANCE_CODES = {"INDUSTRY", "TRANSPORT", "RESIDENT", "COMMPUB", "AGRICULT"}
-
-        df_tfc = df_all[
-            (df_all["source_folder"] == "total_final_energy_consumption") &
-            (df_all["iea_balance_code"].isin(_TFC_BALANCE_CODES))
-        ]
-
-        if len(df_tfc) > 0:
-            df_tfc_total = (
-                df_tfc
-                .groupby("year", as_index = False)["value_iea_tj"]
-                .sum()
-                .assign(
-                    iso_alpha_3      = iso,
-                    iea_balance_code = "TFC",
-                    iea_product_code = "TOTAL",
-                    source_folder    = "total_final_energy_consumption",
-                )
-            )
-            df_all = pd.concat([df_all, df_tfc_total], ignore_index = True)
-
         return (
             df_all
             .sort_values(["iea_balance_code", "iea_product_code", "year"])

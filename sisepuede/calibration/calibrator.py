@@ -339,7 +339,6 @@ class Calibrator:
                 continue
 
             # Calibrate to the first iea_target (primary target of this group).
-            # Secondary targets (e.g. TFCxTOTAL) are informational.
             if not group.iea_targets:
                 log.append({"group": group.name, "phase": 1, "status": "skipped_no_targets"})
                 continue

@@ -19,7 +19,7 @@ matching the grouping structure below (one section per row):
   7    frac_scoe_residential         Residential TFC by fuel
   8    frac_scoe_commercial_muni     Commercial/public TFC by fuel
 
-Groups 1–5 target aggregate IEA pairs (INDPROD x fuel, TFC x TOTAL, sector x sector,
+Groups 1–5 target aggregate IEA pairs (INDPROD x fuel, sector x sector,
 ELECTOUT x fuel, COALIMPORTS x IMPORTS, …).  Groups 6–8 target fuel-mix pairs
 (INDUSTRY x COAL, RESIDENT x ELECTR, …) and use simplex-constrained fracs.
 
@@ -138,7 +138,7 @@ def build_energy_calibration_plan(
         name        = "industry__industry",
         sector      = "inen",
         specs       = _make_specs(inen_consump + inen_scalar, lb, ub),
-        iea_targets = [("INDUSTRY", "INDUSTRY"), ("TFC", "TOTAL")],
+        iea_targets = [("INDUSTRY", "INDUSTRY")],
         notes       = "Initial energy intensity + demand scalars for all INEN categories -> "
                       "drives total industry TFC (INDUSTRY x INDUSTRY).",
     ))
@@ -155,7 +155,7 @@ def build_energy_calibration_plan(
         name        = "transport__transport",
         sector      = "trns",
         specs       = _make_specs(trns_demand, lb, ub),
-        iea_targets = [("TRANSPORT", "TRANSPORT"), ("TFC", "TOTAL")],
+        iea_targets = [("TRANSPORT", "TRANSPORT")],
         notes       = "Fuel efficiency, average load, and occupancy rates for all "
                       "transport modes -> drives total transport TFC (TRANSPORT x TRANSPORT).",
     ))
@@ -176,7 +176,7 @@ def build_energy_calibration_plan(
             name        = f"{bal.lower()}__{prod.lower()}",
             sector      = "scoe",
             specs       = _make_specs(scoe_consump, lb, ub),
-            iea_targets = [iea_target, ("TFC", "TOTAL")],
+            iea_targets = [iea_target],
             notes       = f"Initial per-household / per-GDP consumption for SCOE "
                           f"{scoe_cat} -> drives {iea_target[0]}x{iea_target[1]}.",
         ))

@@ -524,13 +524,13 @@ class IEACrosswalk:
         Examples
         --------
             xw.get_ssp_fields_for_target("INDUSTRY", "COAL")
-            # → ["energy_demand_enfu_subsector_total_pj_inen_fuel_coal"]
+            # -> ["energy_demand_enfu_subsector_total_pj_inen_fuel_coal"]
 
             xw.get_ssp_fields_for_target("TRANSPORT", "TRANSPORT")
-            # → ["energy_consumption_trns_total"]
+            # -> ["energy_consumption_trns_total"]
 
             xw.get_ssp_fields_for_target("ELECTOUT", "COAL")
-            # → ["nemomod_entc_annual_production_by_technology_pp_coal",
+            # -> ["nemomod_entc_annual_production_by_technology_pp_coal",
             #    "nemomod_entc_annual_production_by_technology_pp_coal_ccs"]
         """
         entry = self.get_crosswalk_entry(iea_balance_code, iea_product_code)
