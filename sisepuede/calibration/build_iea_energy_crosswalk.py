@@ -353,12 +353,12 @@ class IEACrosswalkBuilder:
                 "IEA free-access TES has no hydrogen row; "
                 "tracked only in premium datasets post-2022",
             ),
-            (
-                "AMMONIA",  "Ammonia",
-                ["fuel_ammonia"],
-                "direct", "no_match",
-                "Ammonia not tracked as energy carrier in IEA free-access TES data",
-            ),
+            # (
+            #     "AMMONIA",  "Ammonia",
+            #     ["fuel_ammonia"],
+            #     "direct", "no_match",
+            #     "Ammonia not tracked as energy carrier in IEA free-access TES data",
+            # ),
         ]:
             rows.append(self._row(
                 "INDPROD", "Total energy supply",
