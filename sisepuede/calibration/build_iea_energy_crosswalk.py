@@ -384,22 +384,24 @@ class IEACrosswalkBuilder:
 
         ##  TOTAL IMPORTS AND EXPORTS
 
-        rows.append(self._row(
-            "IMPORTS", "Energy imports and exports",
-            "IMPORTS", "Imports",
-            "enfu",
-            self._fields_for(imp_var),
-            "sum", "PJ", 1000, "approximate",
-            "Total energy imports; sum across all SISEPUEDE fuel imports",
-        ))
-        rows.append(self._row(
-            "EXPORTS", "Energy imports and exports",
-            "EXPORTS", "Exports",
-            "enfu",
-            self._fields_for(exp_var),
-            "sum", "PJ", 1000, "approximate",
-            "Total energy exports; sum across tracked SISEPUEDE fuel exports",
-        ))
+        ## Do not calibrate for total imports and exports
+        ## Avoid inducing extra errors
+        # rows.append(self._row(
+        #     "IMPORTS", "Energy imports and exports",
+        #     "IMPORTS", "Imports",
+        #     "enfu",
+        #     self._fields_for(imp_var),
+        #     "sum", "PJ", 1000, "approximate",
+        #     "Total energy imports; sum across all SISEPUEDE fuel imports",
+        # ))
+        # rows.append(self._row(
+        #     "EXPORTS", "Energy imports and exports",
+        #     "EXPORTS", "Exports",
+        #     "enfu",
+        #     self._fields_for(exp_var),
+        #     "sum", "PJ", 1000, "approximate",
+        #     "Total energy exports; sum across tracked SISEPUEDE fuel exports",
+        # ))
 
         ##  PER-FUEL IMPORTS AND EXPORTS
 
@@ -413,12 +415,12 @@ class IEACrosswalkBuilder:
                 "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
-                "OIL", "Crude oil imports and exports",
-                fuel_keys("OIL"),
-                fuel_keys("OIL"),
-                "OIL", "approximate",
-                "IEA Oil imports = crude + all refined products + NGLs; sum across SISEPUEDE liquid petroleum fuels",
-                "exportsadj tracks surplus supply; may undercount scheduled exports; sum across liquid petroleum fuels",
+                "CRUD", "Crude oil imports and exports",
+                fuel_keys("CRUDEOIL"),
+                fuel_keys("CRUDEOIL"),
+                "CRUDEOIL", "exact",
+                "",
+                "exportsadj tracks surplus supply; may undercount scheduled exports",
             ),
             (
                 "GAS", "Natural gas imports and exports",

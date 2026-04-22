@@ -29,7 +29,8 @@ Multiple SISEPUEDE fuels map to a single IEA fuel code (see _IEA_FUEL_MAP).
 This determines which variables are bundled in the same group.  For example,
 diesel + gasoline + kerosene + oil + crude + hydrocarbon_gas_liquids all map
 to IEA "OIL", so the INDUSTRY x OIL group contains frac_inen_energy_*_diesel,
-frac_inen_energy_*_gasoline, etc.
+frac_inen_energy_*_gasoline, etc. For imports/exports, only COAL, CRUDEOIL,
+NATGAS, and ELECTR have dedicated trade balance targets.
 
 Usage
 ------
@@ -64,12 +65,12 @@ _FUEL_TO_IEA  = FUEL_SUFFIX_TO_IEA
 #  Import/export balance prefixes used in the crosswalk
 #  Maps IEA fuel group -> (import_balance, export_balance)
 _IEA_TRADE_BALANCES: Dict[str, Tuple[str, str]] = {
-    "COAL":   ("COALIMPORTS",   "COALEXPORTS"),
-    "OIL":    ("OILIMPORTS",    "OILEXPORTS"),
-    "NATGAS": ("GASIMPORTS",    "GASEXPORTS"),
-    "ELECTR": ("ELIMPORTS",     "ELEXPORTS"),
+    "COAL":     ("COALIMPORTS",   "COALEXPORTS"),
+    "CRUDEOIL": ("CRUDIMPORTS",   "CRUDEXPORTS"),
+    "NATGAS":   ("GASIMPORTS",    "GASEXPORTS"),
+    "ELECTR":   ("ELIMPORTS",     "ELEXPORTS"),
     #  Total-energy trade (all fuels combined)
-    "ALL":    ("IMPORTS",       "EXPORTS"),
+    "ALL":      ("IMPORTS",       "EXPORTS"),
 }
 
 

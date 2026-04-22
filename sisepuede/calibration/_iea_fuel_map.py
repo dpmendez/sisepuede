@@ -31,11 +31,10 @@ from typing import Dict, List
 
 ##  IEA product code -> SISEPUEDE fuel suffixes (no "fuel_" prefix)
 IEA_FUEL_MAP: Dict[str, List[str]] = {
-    "COAL":      ["coal"],
-    # "COAL":      ["coal", "coke"],
+    "COAL":      ["coal", "coke"],
     "OIL":       ["crude", "diesel", "gasoline", "kerosene", "oil",
-                  "hydrocarbon_gas_liquids"],
-                #   "hydrocarbon_gas_liquids", "natural_gas_liquid"],
+                  "hydrocarbon_gas_liquids", "natural_gas_liquid"],
+    "CRUDEOIL":  ["crude"], # crude oil is included in the oil group but it has it's own import export data
     "NATGAS":    ["natural_gas"],
     "NUCLEAR":   ["nuclear"],
     "HYDRO":     ["water"],
