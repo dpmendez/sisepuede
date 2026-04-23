@@ -1044,7 +1044,7 @@ class IEACrosswalkBuilder:
         ##  ASSEMBLE ALL SECTIONS
 
         all_rows: List[Dict[str, Any]] = []
-        all_rows += self._rows_supply()
+        # all_rows += self._rows_supply() # keep commented out until clarifying what variables this exactly maps to
         all_rows += self._rows_imports_exports()
         all_rows += self._rows_electricity_generation()
         all_rows += self._rows_tfc_by_sector()
