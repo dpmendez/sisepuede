@@ -3740,7 +3740,7 @@ class EnergyConsumption:
             df_neenergy_trajectories,
             self.modvars_trns_list_fuel_fraction,
             1,
-            force_sum_equality = False,
+            force_sum_equality = True,
             msg_append = "Energy fractions by category do not sum to 1. See definition of dict_arrs_trns_frac_fuel.",
         )
 
