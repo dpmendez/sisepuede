@@ -572,6 +572,7 @@ class Calibrator:
         self,
         df_in: pd.DataFrame,
         plan: CalibrationPlan,
+        option: int = 0, 
         n_iter: int = 2,
     ) -> Tuple[pd.DataFrame, List[dict]]:
         """Run n_iter rounds of Phase 1 (sector totals) + Phase 2 (fuel mix).
@@ -583,6 +584,10 @@ class Calibrator:
             Must have a 'year' column mapping time_period to calendar year.
         plan : CalibrationPlan
             Output of build_energy_calibration_plan(model_attributes).
+        option : int
+            - 0 runs Phase 1 + Phase 2
+            - 1 runs Phase 1 only
+            - 2 runs Phase 2 only
         n_iter : int
             Number of full Phase 1 + Phase 2 iterations. Default 2.
             - 1 iteration is usually sufficient for sector totals (Phase 1).
@@ -613,23 +618,51 @@ class Calibrator:
         for it in range(n_iter):
             print(f"\n=== Calibration iteration {it + 1}/{n_iter} ===")
 
-            print("  Phase 1 — sector totals (consumpinit_*, scalar_*, efficiencies):")
-            df, log1 = self._phase1_totals(df, plan, time_period)
-            ok1    = sum(1 for r in log1 if r.get("status") == "ok")
-            skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
-            print(f"    applied={ok1}  skipped={skip1}")
+            if option == 0:
+                print("  Phase 1 — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
 
-            print("  Phase 2 — fuel mix (frac_* simplex groups):")
-            df, log2 = self._phase2_fuel_mix(df, plan, time_period)
-            ok2    = sum(1 for r in log2 if r.get("status") == "ok")
-            skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
-            print(f"    applied={ok2}  skipped={skip2}")
+                print("  Phase 2 — fuel mix (frac_* simplex groups):")
+                df, log2 = self._phase2_fuel_mix(df, plan, time_period)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
 
-            full_log.append({
-                "iteration": it + 1,
-                "phase1":    log1,
-                "phase2":    log2,
-            })
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                    "phase2":    log2,
+                })
+            elif option == 1:
+                print("  Phase 1 only — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                })
+            elif option == 2:
+                print("  Phase 2 only — fuel mix (frac_* simplex groups):")
+                df, log2 = self._phase2_fuel_mix(df, plan, time_period)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase2":    log2,
+                })
+            else:
+                warnings.warn(
+                    f"Calibration option {option} must be 0, 1 or 2. "
+                    "Returning same input DataFrame, and empty log."
+                )
+                continue
+                
 
         return df, full_log
 
@@ -701,8 +734,8 @@ class Calibrator:
         rows = []
         for entry in log:
             it = entry["iteration"]
-            for phase_key, phase_log in [("phase1", entry["phase1"]),
-                                          ("phase2", entry["phase2"])]:
+            phases = [(k, entry[k]) for k in ("phase1", "phase2") if k in entry]
+            for phase_key, phase_log in phases:
                 for rec in phase_log:
                     rows.append({
                         "iteration": it,
