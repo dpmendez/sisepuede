@@ -428,13 +428,26 @@ class CalibrationPlan:
         iea_balance_code: str,
         iea_product_code: str,
     ) -> "CalibrationPlan":
-        """New CalibrationPlan containing only groups that include the given
+        """CalibrationPlan containing only groups that include the given
         (balance, product) pair in their iea_targets."""
         pair: IEATarget = (iea_balance_code, iea_product_code)
         return CalibrationPlan([g for g in self._groups if pair in g.iea_targets])
 
+    def filter_by_name(
+        self,
+        names: Union[str, List[str], Set[str]],
+    ) -> "CalibrationPlan":
+        """CalibrationPlan containing only groups whose `name` matches.
+
+        Useful for isolating a single calibration target when debugging —
+        e.g. plan.filter_by_name("transport__transport") returns a plan
+        with just that one group so every other target is untouched.
+        """
+        wanted: Set[str] = {names} if isinstance(names, str) else set(names)
+        return CalibrationPlan([g for g in self._groups if g.name in wanted])
+
     def filter_by_constraint(self, constraint_type: str) -> "CalibrationPlan":
-        """New CalibrationPlan with only scalar or only simplex groups."""
+        """CalibrationPlan with only scalar or only simplex groups."""
         if constraint_type not in _CONSTRAINT_TYPES:
             raise ValueError(
                 f"constraint_type must be one of {sorted(_CONSTRAINT_TYPES)}, "
