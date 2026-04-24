@@ -52,11 +52,20 @@ Usage
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import fields as _dc_fields
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from sisepuede.calibration.calibration_group import CalibrationGroup, CalibrationPlan
 from sisepuede.calibration.sensitivity import VariableSpec
 from sisepuede.calibration._iea_fuel_map import IEA_FUEL_MAP, FUEL_SUFFIX_TO_IEA
+
+#  Fallback defaults when callers pass lb/ub=None — these are the
+#  declared defaults on the VariableSpec dataclass ("variable table" defaults).
+_VARSPEC_DEFAULTS: Dict[str, float] = {
+    f.name: f.default
+    for f in _dc_fields(VariableSpec)
+    if f.name in ("lb", "ub")
+}
 
 #  Local aliases to avoid changing call sites below
 _IEA_FUEL_MAP = IEA_FUEL_MAP
@@ -80,8 +89,9 @@ _IEA_TRADE_BALANCES: Dict[str, Tuple[str, str]] = {
 
 def build_energy_calibration_plan(
     model_attributes,
-    lb: float = 0.5,
-    ub: float = 2.0,
+    lb: Optional[float] = None,
+    ub: Optional[float] = None,
+    only_groups: Optional[Union[str, Iterable[str]]] = None,
 ) -> CalibrationPlan:
     """Build the full energy CalibrationPlan for one SISEPUEDE country run.
 
@@ -93,11 +103,18 @@ def build_energy_calibration_plan(
     ----------
     model_attributes : ModelAttributes
         SISEPUEDE ModelAttributes object.
-    lb : float
-        Default lower-bound scale factor for VariableSpec (applied to all
-        scalar groups).  Default 0.5 (+- 50 %).
-    ub : float
-        Default upper-bound scale factor.
+    lb : float | None
+        Lower-bound scale factor for every VariableSpec.  When None, each
+        spec falls back to the VariableSpec dataclass default (the
+        "variable table" default in sensitivity.py).
+    ub : float | None
+        Upper-bound scale factor.  Same None-fallback as `lb`.
+    only_groups : str | Iterable[str] | None
+        If provided, the returned plan contains only the named groups
+        (e.g. "transport__transport").  Useful to isolate a single
+        calibration target when debugging.  Names that do not match any
+        group are silently ignored; if no group matches, the returned
+        plan is empty.
 
     Returns
     -------
@@ -145,20 +162,51 @@ def build_energy_calibration_plan(
     ))
 
     ##  1b. TRNS total
-    trns_demand = [
+    ##  The model's transport-energy equation (project_transportation, ~L3471 of energy_consumption.py)
+    ##  is E_fuel prop vehicle_km x frac_fuelmix x energy_density / fuel_efficiency
+    ##  with vehicle_km = demand_pkm/occrate (passenger) or demand_mtkm/avgload
+    ##  (freight).  The direct knobs on total transport energy are therefore the demand_pkm and
+    ##  demand_mtkm variables, which are included in the transport__transport group; the fuel mix
+    ##  and efficiency levers are held out of Phase 1 and grouped separately (see below).
+    _TRDE_DEMAND_INITS = {
+        "deminit_trde_freight_mt_km",
+        "deminit_trde_private_and_public_per_capita_passenger_km",
+        "deminit_trde_regional_per_capita_passenger_km",
+    }
+    trde_demand = [f for f in fields_in if f in _TRDE_DEMAND_INITS]
+    plan.add(CalibrationGroup(
+        name        = "transport__transport",
+        sector      = "trde",
+        specs       = _make_specs(trde_demand, lb, ub),
+        iea_targets = [("TRANSPORT", "TRANSPORT")],
+        notes       = "TRDE initial pkm/mtkm demands -> drive total transport TFC "
+                      "(TRANSPORT x TRANSPORT) linearly regardless of target year. "
+                      "demscalar_trde_* excluded (renormalized to 1 at t=0); TRNS "
+                      "inverse levers (fuelefficiency, avgload, occrate) live in "
+                      "transport__fuel_efficiency.",
+    ))
+
+    ##  1b'. TRNS fuel efficiency — independent group, not wired to Phase 1
+    ##  These variables are inverse levers on total transport energy and should
+    ##  be tuned separately, not via the direct 'scalar = IEA/current' rule used in Phase 1.
+    ##  The group has no iea_targets so the calibrator will ignore it in both
+    ##  phases unless explicitly filtered to it.
+    trns_efficiency = [
         f for f in fields_in
         if any(f.startswith(p) for p in [
-            "fuelefficiency_trns_", "avgload_trns_", "occrate_trns_",
-            "elecfuelefficiency_trns_",
+            "fuelefficiency_trns_", "elecfuelefficiency_trns_",
+            "avgload_trns_", "occrate_trns_",
         ])
     ]
     plan.add(CalibrationGroup(
-        name        = "transport__transport",
+        name        = "transport__fuel_efficiency",
         sector      = "trns",
-        specs       = _make_specs(trns_demand, lb, ub),
-        iea_targets = [("TRANSPORT", "TRANSPORT")],
-        notes       = "Fuel efficiency, average load, and occupancy rates for all "
-                      "transport modes -> drives total transport TFC (TRANSPORT x TRANSPORT).",
+        specs       = _make_specs(trns_efficiency, lb, ub),
+        iea_targets = [],
+        notes       = "Transport fuel efficiency, average load, and occupancy rates. "
+                      "Inverse levers on TRANSPORTxTRANSPORT — held out of Phase 1 "
+                      "on purpose.  Include via only_groups=[...] when tuning "
+                      "these independently.",
     ))
 
     ##  1c–1e. SCOE total, one sub-group per SCOE category
@@ -263,10 +311,10 @@ def build_energy_calibration_plan(
             plan.add(CalibrationGroup(
                 name        = f"{bal_imp.lower()}__imports",
                 sector      = "enfu",
-                specs       = _make_specs(imp_vars, lb=0.0, ub=1.0),
+                specs       = _make_specs(imp_vars, lb, ub),
                 iea_targets = [(bal_imp, "IMPORTS")],
                 notes       = f"Fraction of total {iea_fuel} demand met by imports "
-                              f"-> {bal_imp}xIMPORTS.  Bounds [0, 1] (fraction).",
+                              f"-> {bal_imp}xIMPORTS.",
             ))
 
         ##  Export volume variables
@@ -319,7 +367,7 @@ def build_energy_calibration_plan(
         if not trns_vars:
             continue
 
-        specs = _make_specs(trns_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        specs = _make_specs(trns_vars, lb, ub, simplex_ids=dict_simplex)
         bal, prod = target
         plan.add(CalibrationGroup(
             name              = f"{bal.lower()}__{prod.lower()}",
@@ -423,7 +471,7 @@ def build_energy_calibration_plan(
         if not inen_vars:
             continue
 
-        specs = _make_specs(inen_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        specs = _make_specs(inen_vars, lb, ub, simplex_ids=dict_simplex)
         bal, prod = target
         plan.add(CalibrationGroup(
             name              = f"{bal.lower()}__{prod.lower()}",
@@ -468,7 +516,7 @@ def build_energy_calibration_plan(
         if not res_vars:
             continue
 
-        specs = _make_specs(res_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        specs = _make_specs(res_vars, lb, ub, simplex_ids=dict_simplex)
         bal, prod = target
         plan.add(CalibrationGroup(
             name              = f"{bal.lower()}__{prod.lower()}",
@@ -513,7 +561,7 @@ def build_energy_calibration_plan(
         if not comm_vars:
             continue
 
-        specs = _make_specs(comm_vars, lb=0.5, ub=1.5, simplex_ids=dict_simplex)
+        specs = _make_specs(comm_vars, lb, ub, simplex_ids=dict_simplex)
         bal, prod = target
         plan.add(CalibrationGroup(
             name              = f"{bal.lower()}__{prod.lower()}",
@@ -526,6 +574,15 @@ def build_energy_calibration_plan(
                                 f"{iea_fuel} -> {target[0]}x{target[1]}.  Simplex.",
         ))
 
+    ##  Optional: restrict the plan to a caller-specified subset of group names.
+    ##  Handy for debugging: build_energy_calibration_plan(ma, only_groups="transport__transport")
+    ##  returns a plan with a single group so the calibrator touches nothing else.
+    if only_groups is not None:
+        wanted: Set[str] = (
+            {only_groups} if isinstance(only_groups, str) else set(only_groups)
+        )
+        plan = CalibrationPlan([g for g in plan.groups if g.name in wanted])
+
     return plan
 
 
@@ -535,18 +592,26 @@ def build_energy_calibration_plan(
 
 def _make_specs(
     columns: List[str],
-    lb: float,
-    ub: float,
+    lb: Optional[float] = None,
+    ub: Optional[float] = None,
     simplex_ids: Optional[Dict[str, int]] = None,
 ) -> List[VariableSpec]:
-    """Build a VariableSpec per column, optionally marking simplex members."""
+    """Build a VariableSpec per column, optionally marking simplex members.
+
+    When `lb` / `ub` is None, the VariableSpec dataclass default for that
+    field is used (the "variable table" default).  This lets callers leave
+    bounds unspecified without having to duplicate the canonical defaults.
+    """
+    lb_final = _VARSPEC_DEFAULTS["lb"] if lb is None else lb
+    ub_final = _VARSPEC_DEFAULTS["ub"] if ub is None else ub
+
     specs = []
     for col in columns:
         gid = simplex_ids.get(col) if simplex_ids else None
         specs.append(VariableSpec(
             column           = col,
-            lb               = lb,
-            ub               = ub,
+            lb               = lb_final,
+            ub               = ub_final,
             is_simplex_group = gid is not None,
             simplex_group_id = gid,
         ))
