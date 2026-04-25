@@ -144,10 +144,12 @@ def build_energy_calibration_plan(
     # ------------------------------------------------------------------ #
 
     ##  1a. INEN total
-    inen_consump = [
-        f for f in fields_in
-        if f.startswith("consumpinit_inen_")
-    ]
+    ##  Only scalar_inen_energy_demand_* is used here because it is a direct
+    ##  linear multiplier on total per-category INEN energy.  Including
+    ##  consumpinit_inen_* alongside demscalars would double-scale the
+    ##  production path (intensity x demscalar) as  
+    ##  energy[t] = (intensity[0] / frac_norm[0]) × driver[t] × demscalar[t]
+    ##  where intensity[0] = consumpinit_inen_energy_total_pj_[cat]
     inen_scalar = [
         f for f in fields_in
         if f.startswith("scalar_inen_energy_demand_")
@@ -155,10 +157,12 @@ def build_energy_calibration_plan(
     plan.add(CalibrationGroup(
         name        = "industry__industry",
         sector      = "inen",
-        specs       = _make_specs(inen_consump + inen_scalar, lb, ub),
+        specs       = _make_specs(inen_scalar, lb, ub),
         iea_targets = [("INDUSTRY", "INDUSTRY")],
-        notes       = "Initial energy intensity + demand scalars for all INEN categories -> "
-                      "drives total industry TFC (INDUSTRY x INDUSTRY).",
+        notes       = "Demand scalars for all non-agriculture INEN categories -> "
+                      "drives total industry TFC (INDUSTRY x INDUSTRY). "
+                      "consumpinit_inen_* excluded to avoid double-scaling the "
+                      "production energy path.",
     ))
 
     ##  1b. TRNS total
@@ -209,11 +213,10 @@ def build_energy_calibration_plan(
                       "these independently.",
     ))
 
-    ##  1c–1e. SCOE total, one sub-group per SCOE category
+    ##  1c–1d. SCOE total for residential and commercial (not agriculture)
     _SCOE_CAT_TO_IEA: Dict[str, Tuple[str, str]] = {
-        "residential":         ("RESIDENT",  "RESIDENT"),
-        "commercial_municipal":("COMMPUB",   "COMMPUB"),
-        "other_se":            ("AGRICULT",  "AGRICULT"),
+        "residential":         ("RESIDENT", "RESIDENT"),
+        "commercial_municipal":("COMMPUB",  "COMMPUB"),
     }
     for scoe_cat, iea_target in _SCOE_CAT_TO_IEA.items():
         scoe_consump = [
@@ -229,6 +232,23 @@ def build_energy_calibration_plan(
             notes       = f"Initial per-household / per-GDP consumption for SCOE "
                           f"{scoe_cat} -> drives {iea_target[0]}x{iea_target[1]}.",
         ))
+
+    ##  1e. AGRICULT — driven by INEN agriculture_and_livestock, not SCOE other_se.
+    ##  The crosswalk maps (AGRICULT, AGRICULT) to energy_consumption_inen_agriculture_and_livestock,
+    ##  so the correct input lever is consumpinit_inen_energy_total_pj_agriculture_and_livestock.
+    inen_agr = [
+        f for f in fields_in
+        if f == "consumpinit_inen_energy_total_pj_agriculture_and_livestock"
+    ]
+    plan.add(CalibrationGroup(
+        name        = "agricult__agricult",
+        sector      = "inen",
+        specs       = _make_specs(inen_agr, lb, ub),
+        iea_targets = [("AGRICULT", "AGRICULT")],
+        notes       = "Initial INEN agriculture-and-livestock energy -> drives "
+                      "energy_consumption_inen_agriculture_and_livestock, "
+                      "which is the SSP comparator for IEA AGRICULT x AGRICULT.",
+    ))
 
     # ------------------------------------------------------------------ #
     #  ROW 2 – Total Energy Supply, by fuel                              #

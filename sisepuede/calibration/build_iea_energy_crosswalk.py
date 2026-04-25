@@ -591,14 +591,16 @@ class IEACrosswalkBuilder:
 
         scoe_cat_fields = self._fields_for("Energy Consumption from SCOE")
 
+        inen_cat_fields = self._fields_for("Energy Consumption from Industrial Energy")
+
         rows.append(self._row(
             "INDUSTRY", "Total final energy consumption",
             "INDUSTRY", "Industry",
             "inen",
-            self._fields_for("Total Energy Consumption from Industrial Energy"),
-            "direct", "PJ", 1000, "approximate",
-            "Consumption variable (point-of-use); IEA Industry includes "
-            "some agriculture-adjacent manufacturing",
+            [f for f in inen_cat_fields if "total" not in f and "agriculture_and_livestock" not in f],
+            "sum", "PJ", 1000, "approximate",
+            "Consumption variable (point-of-use); sum of all industrial sub-categories except agriculture_and_livestock "
+            "(mapped separately to AGRICULT) and total (to avoid double-counting with sub-categories)",
         ))
         rows.append(self._row(
             "TRANSPORT", "Total final energy consumption",
@@ -629,11 +631,12 @@ class IEACrosswalkBuilder:
         rows.append(self._row(
             "AGRICULT", "Total final energy consumption",
             "AGRICULT", "Agriculture / forestry",
-            "scoe",
-            # [f for f in scoe_cat_fields if "other_se" in f],
-            ["energy_consumption_scoe_other_se"],
+            "inen",
+            self._fields_for("Energy Consumption from Industrial Energy",
+                             "agriculture_and_livestock"),
             "direct", "PJ", 1000, "partial",
-            "SISEPUEDE other_se is a residual; partial match only",
+            "Maps to INEN agriculture_and_livestock consumption; scoe_other_se "
+            "excluded as its scope (forestry/fishing/other) is undefined",
         ))
 
         return rows
