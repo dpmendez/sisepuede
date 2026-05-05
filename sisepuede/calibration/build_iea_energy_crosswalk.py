@@ -126,6 +126,9 @@ class IEACrosswalkBuilder:
             # ENFU — demand by fuel (recorded as ENFU outputs)
             "Energy Demand by Fuel in Industrial Energy",
             "Energy Demand by Fuel in SCOE",
+            "Energy Demand by Fuel in SCOE Residential",
+            "Energy Demand by Fuel in SCOE Commercial and Municipal",
+            "Energy Demand by Fuel in SCOE Other",
             # ENTC — electricity generation by technology
             "NemoMod Production by Technology",
             # INEN — consumption
@@ -752,29 +755,18 @@ class IEACrosswalkBuilder:
         rows = self._section("RESIDENTIAL TOTAL FINAL CONSUMPTION BY SOURCE")
 
         for line in [
-            "-- IEA provides consumption by fuel for residential only. SISEPUEDE "
-            "has the same structural --",
-            "-- gap as INEN: no per-fuel consumption output for SCOE. The ENFU "
-            "demand variables for scoe --",
-            "-- (energy_demand_enfu_subsector_total_pj_scoe_$CAT-FUEL$) aggregate "
-            "ALL scoe sub-categories --",
-            "-- (residential + commercial_municipal + other_se) and cannot be "
-            "split by sub-category. --",
-            "-- Mapping quality is partial: numbers will be larger than IEA "
-            "residential alone. --",
-            "-- For sector totals use energy_consumption_scoe_residential "
-            "(true consumption by sub-category). --",
+            "-- ENFU scoe demand was the only per-fuel output available --",
+            "-- energy_consumption_scoe_commercial_municipal is a true --",
+            "consumption output but has no fuel breakdown. --",
         ]:
             rows.append(self._note_row(line))
         rows.append({k: None for k in _COLS})
 
         # # sum all residential sources in IEA and equal to energy_consumption_scoe_residential
         # scoe_var  = "Energy Consumption from SCOE" 
-        scoe_var  = "Energy Demand by Fuel in SCOE"
+        scoe_var  = "Energy Demand by Fuel in SCOE Residential"
         note_scoe = (
-            "No per-fuel consumption output in SCOE; ENFU demand aggregates "
-            "all scoe sub-categories (residential+commercial+other) "
-            "— cannot isolate residential"
+            "Disaggregated ENFU demand for SCOE sub-categories."
         )
 
         for product_code, product_name, fuel_cats in [
@@ -791,7 +783,7 @@ class IEACrosswalkBuilder:
                 product_code, product_name,
                 "scoe",
                 self._fields_for(scoe_var, fuel_cats),
-                agg_type(product_code), "PJ", 1000, "partial", note_scoe,
+                agg_type(product_code), "PJ", 1000, "approximate", note_scoe,
             ))
 
         return rows
@@ -812,26 +804,17 @@ class IEACrosswalkBuilder:
         )
 
         for line in [
-            "-- Same structural gap as residential: ENFU scoe demand is the "
-            "only per-fuel output --",
-            "-- available and it covers all scoe sub-categories combined. "
-            "The SISEPUEDE variable --",
-            "-- energy_consumption_scoe_commercial_municipal is a true "
-            "consumption output but has --",
-            "-- no fuel breakdown. These rows map the same scoe-aggregate "
-            "ENFU demand as the --",
-            "-- residential rows above; do not sum residential + commercial "
-            "rows to avoid double-counting. --",
+            "-- ENFU scoe demand was the only per-fuel output available --",
+            "-- energy_consumption_scoe_commercial_municipal is a true --",
+            "consumption output but has no fuel breakdown. --",
         ]:
             rows.append(self._note_row(line))
         rows.append({k: None for k in _COLS})
 
         # # sum all commercial sources in IEA and equal to energy_consumption_scoe_commercial_municipal
-        # scoe_var  = "Energy Consumption from SCOE" 
-        scoe_var  = "Energy Demand by Fuel in SCOE"
+        scoe_var  = "Energy Demand by Fuel in SCOE Commercial and Public"
         note_comm = (
-            "No per-fuel consumption output in SCOE; same scoe-wide ENFU "
-            "demand as residential rows — do not sum with residential"
+            "Disaggregated ENFU demand for SCOE sub-categories."
         )
 
         for product_code, product_name, fuel_cats in [
@@ -848,7 +831,7 @@ class IEACrosswalkBuilder:
                 product_code, product_name,
                 "scoe",
                 self._fields_for(scoe_var, fuel_cats),
-                agg_type(product_code), "PJ", 1000, "partial", note_comm,
+                agg_type(product_code), "PJ", 1000, "approximate", note_comm,
             ))
 
         return rows
