@@ -763,10 +763,11 @@ class AFOLU:
         """
         # land use model variables
         self.modvar_lndu_area_by_cat = "Land Use Area"
-        self.modvar_lndu_area_improved = "Area of Improved Land"
         self.modvar_lndu_area_converted = "Area of Land Use Converted"
         self.modvar_lndu_area_converted_from_type = "Area of Land Use Converted Away from Type"
         self.modvar_lndu_area_converted_to_type = "Area of Land Use Converted to Type"
+        self.modvar_lndu_area_improved = "Area of Improved Land"
+        self.modvar_lndu_area_seasonal_wetlands_by_type = "Area of Seasonal Wetlands by Land Use Type"
         self.modvar_lndu_constraint_area_max = "Maximum Area"  # NEW
         self.modvar_lndu_constraint_area_min = "Minimum Area"  # NEW
         self.modvar_lndu_ef_co2_conv = ":math:\\text{CO}_2 Land Use Conversion Emission Factor"
@@ -785,6 +786,7 @@ class AFOLU:
         self.modvar_lndu_frac_increasing_net_imports_met = "Fraction of Increasing Net Imports Met"
         self.modvar_lndu_frac_mineral_soils = "Fraction of Soils Mineral"
         self.modvar_lndu_frac_pastures_improved = "Fraction of Pastures Improved"
+        self.modvar_lndu_frac_seasonal_wetland = "Seasonal Wetland Fraction"
         self.modvar_lndu_frac_temperate = "Land Use Fraction Temperate"
         self.modvar_lndu_frac_tropical = "Land Use Fraction Tropical"
         self.modvar_lndu_frac_wet = "Land Use Fraction Wet"
@@ -5021,8 +5023,7 @@ class AFOLU:
             Optional specification of area for normalization
         x_proj_unadj : Union[np.ndarray, None]
             Unadjusted projected land use derived from exogenously specified 
-            (unadjusted) transition matrix
-
+            (unadjusted) transition matrix 
         """
         # initialize the land area
         area = x_0.sum() if not sf.isnumber(area) else area
@@ -5563,6 +5564,20 @@ class AFOLU:
             exclude_time_period = True,
             modvar = self.modvar_lndu_area_converted,
         )
+
+
+
+        ##  ADD IN SEASONAL WETLANDS AREA
+
+        arr_frac_seasonal_wetland = self.model_attributes.extract_model_variable(
+            df_afolu_trajectories,
+            self.modvar_lndu_frac_seasonal_wetland,
+            expand_to_all_cats = True,
+            return_type = "array_base",
+            var_bounds = (0, 1, ), 
+        )
+        arr_area_seasonal_wetlands = arr_frac_seasonal_wetland*arr_land_use
+
         
         # add to output data frame
         df_out += [
@@ -5614,6 +5629,13 @@ class AFOLU:
                 arr_lndu_emissions_conv, 
                 self.modvar_lndu_emissions_conv_away, 
                 include_scalars = True
+            ),
+
+            # seasonal wetlands
+            self.model_attributes.array_to_df(
+                arr_area_seasonal_wetlands*scalar_lndu_input_area_to_output_area, 
+                self.modvar_lndu_area_seasonal_wetlands_by_type,
+                reduce_from_all_cats_to_specified_cats = True,
             ),
 
             self.model_attributes.array_to_df(

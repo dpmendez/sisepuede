@@ -1972,6 +1972,7 @@ class Strategies:
         code_prepend: str = _PREFIX_DEFAULT_WHIRLPOOL,
         delim: Union[str, None] = None,
         ids: Union[None, List[int]] = None,
+        sort: bool = False,
         **kwargs,
     ) -> Union[pd.DataFrame, None]:
         """Build strategies designed by removing transformations 1-by-1 from a 
@@ -1996,6 +1997,8 @@ class Strategies:
             * List[int]:    Specify ids explicitly. Must be of correct length.
             * None:         Automatically start at 1 above the highest defined 
                             strategy id.
+        sort : bool
+            Sort the codes?
         """
         # get the strategy and transformation codes asociated with it
         strat = self.get_strategy(strategy, )
@@ -2006,7 +2009,9 @@ class Strategies:
             strat.transformation_specification,
             self.transformations,
         )
-        codes = sorted([x.code for x in transformations_deconstruct])
+
+        codes = [x.code for x in transformations_deconstruct]
+        if sort: codes.sort()
 
         delim = (
             strat.delimiter_transformation_codes

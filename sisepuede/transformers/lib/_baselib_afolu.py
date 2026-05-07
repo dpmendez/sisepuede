@@ -584,6 +584,7 @@ def transformation_frst_increase_reforestation(
     cats_inflow_restriction: Union[List[str], None] = None,
     model_afolu: Union[mafl.AFOLU, None] = None,
     strategy_id: Union[int, None] = None,
+    tp_baseline: Union[int, None] = None,
     **kwargs
 ) -> pd.DataFrame:
     """
@@ -601,14 +602,21 @@ def transformation_frst_increase_reforestation(
 
     Keyword Arguments
     -----------------
-    - cats_inflow_restriction: optional specification of inflow categories used
-        to restrict transitions into secondary forest
-    - field_region: field in df_input that specifies the region
-    - model_afolu: optional AFOLU object to pass for variable access
-    - regions_apply: optional set of regions to use to define strategy. If None,
-        applies to all regions.
-    - strategy_id: optional specification of strategy id to add to output
-        dataframe (only added if integer)
+    cats_inflow_restriction : Union[List[str], None]
+        Optional specification of inflow categories used to restrict transitions 
+        into secondary forest
+    field_region : str
+        Field in df_input that specifies the region
+    model_afolu : Union[AFOLU, None]
+        Optional AFOLU object to pass for variable access
+    regions_apply : Union[List[str], None]
+        Optional set of regions to use to define strategy. If None, applies to 
+        all regions.
+    strategy_id : Union[int, None]
+        Optional specification of strategy id to add to output dataframe (only 
+        added if integer)
+    tp_baseline : Union[int, None]
+        Optional baseline index. If None, is the last time period
     - **kwargs: passed to 
         transformation_support_lndu_transition_to_category_targets_single_region()
     """
@@ -646,11 +654,25 @@ def transformation_frst_increase_reforestation(
 
     )
     
+    # time period components
+    field_tp = model_afolu.model_attributes.dim_time_period
+    tp_baseline_max = df_input[field_tp].max()
+    tp_baseline = (
+        tp_baseline_max
+        if not sf.isnumber(tp_baseline, integer = True, )
+        else (
+            tp_baseline_max
+            if tp_baseline not in df_input[field_tp].to_numpy()
+            else tp_baseline
+        )
+    )
+
     dict_magnitude = {
         cat_fsts: {
             "categories_inflow_restrict": cats_ir,
             "magnitude": magnitude + 1,
-            "magnitude_type": "baseline_scalar"
+            "magnitude_type": "baseline_scalar",
+            "time_period_baseline": tp_baseline,
         }
     }
     
@@ -1281,18 +1303,24 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
         dataframe (only added if integer)
     """
 
+    if not isinstance(dict_magnitude, dict):
+        return df_input
+    
+    ##  INITIALIZATION
+
+    # initialize model attributes derivatives
     model_afolu = (
         mafl.AFOLU(model_attributes)
         if model_afolu is None
         else model_afolu
     )
-
+    
     attr_lndu = model_attributes.get_attribute_table(
         model_attributes.subsec_name_lndu
     )
-
-    if not isinstance(dict_magnitude, dict):
-        return df_input
+    modvar_area = model_attributes.get_variable(
+        model_afolu.model_socioeconomic.modvar_gnrl_area,
+    )
 
     # check dictionary
     dict_magnitude = transformation_support_lndu_check_ltct_magnitude_dictionary(
@@ -1309,6 +1337,13 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
         for x in cats_to_modify
     ]
     
+    # get some vars
+    vec_gnrl_area = model_attributes.extract_model_variable(
+        df_input,
+        modvar_area,
+        override_vector_for_single_mv_q = False,
+        return_type = "array_base",
+    )
 
 
     """
@@ -1342,11 +1377,31 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
     ##  2. IF magnitude_type IS RELATIVE TO BASE VALUE, NEED TO KNOW BASELINE VALUES
     
     # project land use over all time periods and get final fractions without intervention
+    df_tmp = model_afolu(df_input, )
+    scalar_gnrl_area = model_attributes.get_scalar(
+        "Area of Region", 
+        return_type = "area", 
+    )
+    
+    # convert to fraction
+    arr_land_use = model_attributes.extract_model_variable(
+        df_tmp,
+        "Land Use Area",
+        expand_to_all_cats = True,
+        return_type = "array_base", 
+    )
+    arr_land_use = sf.do_array_mult(
+        arr_land_use, 
+        1/(scalar_gnrl_area*vec_gnrl_area)
+    )
+
+    """
     arr_emissions_conv, arr_land_use, arrs_land_conv = model_afolu.project_land_use(
         vec_lndu_initial_frac,
         qs,
         efs, 
     )
+    """
     # prevalence in final time period without any adjustment
     vec_lndu_final_frac_unadj = arr_land_use[-1, :] #NOTE: might need to base on ind_first_full_impl
 
@@ -1385,7 +1440,6 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
             # loop over reference categories and apply magnitude
             for cat_ref in categories_scalar_reference:
                 ind_reference = attr_lndu.get_key_value_index(cat_ref)
-            
                 val_unadj_reference_cur = arr_land_use[tp_baseline_ind, ind_reference]
                 val_unadj_reference += val_unadj_reference_cur
 
@@ -1403,7 +1457,7 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
 
     # update
     dict_magnitude.update(dict_magnitude_overwrite)
-
+    w_full_attainment = np.where(vec_ramp == 1)[0][0]
 
     # next, setup magnitude as a target value 
     for i, cat in enumerate(cats_to_modify):
@@ -1413,10 +1467,19 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
         categories_target = dict_cur.get("categories_target")
         magnitude = dict_cur.get("magnitude")
         magnitude_type = dict_cur.get("magnitude_type")
-        tp_baseline = dict_cur.get("tp_baseline")
 
+        tp_baseline_ind = dict_cur.get("tp_baseline", -1)
+        if tp_baseline_ind > -1:
+            w = np.where(
+                np.array(df_input[model_attributes.dim_time_period]) == tp_baseline_ind
+            )[0]
+            tp_baseline_ind = w[0] if len(w) == 1 else -1
+        
         ind = inds_to_modify[i]
-        val_unadj = vec_lndu_final_frac_unadj[ind]
+        val_unadj = arr_land_use[tp_baseline_ind, ind]
+        #f"val_unadj = {val_unadj}")
+
+        #val_unadj = vec_lndu_final_frac_unadj[ind]
         
         mag_new = magnitude
         if magnitude_type == "baseline_scalar":
@@ -1435,15 +1498,36 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
     ##  3. CONTINUE WITH PROJECTION AND ADJUSTMENT OF PROBS DURING vec_implementation_ramp NON-ZERO YEARS
 
     # run forward to final period before ramp for all associated with no change 
+    df_tmp2 = model_afolu(df_input.iloc[0:ind_last_zero], )
+
+    # convert to fraction
+    """
+    arr_land_use = model_attributes.extract_model_variable(
+        df_tmp2,
+        "Land Use Area",
+        expand_to_all_cats = True,
+        return_type = "array_base", 
+    )
+    arr_land_use = sf.do_array_mult(
+        arr_land_use, 
+        1/(scalar_gnrl_area*vec_gnrl_area[0:ind_last_zero])
+    )
+    """
+    """
     arr_emissions_conv, arr_land_use, arrs_land_conv = model_afolu.project_land_use(
         vec_lndu_initial_frac,
         qs[0:ind_first_nz],
         efs, 
         n_tp = ind_last_zero,
     )
-    vec_lndu_final_virnz_frac_unadj = arr_land_use[-1, :] # at time ind_first_nz - 1
-    arr_land_use_prevalence_out_with_intervention[0:ind_last_zero] = arr_land_use # land use up until final time period
-
+    """
+    # some derivative vars
+    arr_land_use_prevalence_out_with_intervention[0:ind_last_zero] = arr_land_use[0:ind_last_zero] # land use up until final time period
+    vec_lndu_final_virnz_frac_unadj = arr_land_use[ind_last_zero, :] # at time ind_first_nz - 1
+    #print(f"vec_lndu_final_virnz_frac_unadj = {vec_lndu_final_virnz_frac_unadj}")
+    # get area in terms of area
+    
+    
 
     ##  4. PREPARE TRANSITION MATRIX FOR MODIFICATION
 
@@ -1454,7 +1538,9 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
     n_tp_scale = n_tp - ind_first_nz - 1
     fracs_unadj_first_effect_tp = np.dot(vec_lndu_final_virnz_frac_unadj, qs[ind_first_nz - 1])
     fracs_unadj_first_effect_tp = np.dot(fracs_unadj_first_effect_tp, qs[ind_first_nz])[inds_to_modify]
+    #fracs_unadj_first_effect_tp = arr_land_use[ind_first_nz + 1][inds_to_modify]
     fracs_target_final_tp = np.array([dict_magnitude.get(x).get("magnitude") for x in cats_to_modify])
+
     """
     OPTION FOR EXPANSION: SPECIFY NON-LINEAR TARGETS (READ OFF OF vec_implementation_ramp)
 
@@ -1491,6 +1577,7 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
     ?df_tmp.interpolate
     df_tmp.interpolate(method = "linear", order = 2).plot(x = "time_period")
     """
+    #print(f"fracs_target_final_tp = {fracs_target_final_tp}")
     arr_target_shares = (fracs_target_final_tp - fracs_unadj_first_effect_tp)/n_tp_scale
     arr_target_shares = np.outer(np.arange(1, n_tp_scale + 1), arr_target_shares)
     arr_target_shares += fracs_unadj_first_effect_tp
@@ -1533,16 +1620,84 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
     arr_land_use_prevalence_out_with_intervention[ind_first_nz - 1, :] = x
     inds_iter = list(range(ind_first_nz, n_tp))    
 
-    for ind_row, i in enumerate(inds_iter):
+    global arr_ts
+    global inds_iter2
+    arr_ts = arr_target_shares
+    inds_iter2 = inds_iter
 
+
+    #
+    #    GET INPUTS FOR Q ADJUSTER
+    #
+
+    (
+        arr_lndu_constraints_inf,
+        arr_lndu_constraints_sup,
+    ) = model_afolu.get_lndu_class_bounds(
+        df_input,
+        arr_land_use[0],
+        modvar_area_target = modvar_area,
+    )
+
+    # convert constraints to fractions
+    for i in range(arr_lndu_constraints_inf.shape[0]):
+        w = np.where(arr_lndu_constraints_inf[i] != model_afolu.flag_ignore_constraint)[0]
+        if len(w) == 0: continue
+
+        arr_lndu_constraints_inf[i, w] /= vec_gnrl_area[i]
+
+    # set stable inds
+    inds_stable = [
+        attr_lndu.get_key_value_index(x) for x in cats_stable
+    ]
+
+    global dtarg
+
+    for ind_row, i in enumerate(inds_iter):
+        
         # in first iteation, this is projected prevalence at ind_first_nz + 1
         x_next_unadj = np.dot(x, qs[i]) 
         ind_row = min(ind_row, arr_target_shares.shape[0] - 1)
-        scalars_to_adj = np.nan_to_num(
-            arr_target_shares[ind_row, :]/x_next_unadj[inds_to_modify],
-            nan = 0.0,
-            posinf = 0.0,
+
+        # scalars_to_adj = np.nan_to_num(
+        #    arr_target_shares[ind_row, :]/x_next_unadj[inds_to_modify],
+        #    nan = 0.0,
+        #    posinf = 0.0,
+        #)
+
+        # set up dictionary--start with target shares and add stable
+        dict_target = dict(
+            zip(
+                inds_to_modify, 
+                arr_target_shares[ind_row, :]
+            )
         )
+        dict_target.update(
+            zip(
+                inds_stable,
+                x_next_unadj[inds_stable],
+            )
+        )
+
+        dtarg = dict_target
+        ##  ADJUST TRANSITION
+
+        arr_transition_adj = model_afolu.qadj_adjust_transitions(
+            qs[i],
+            x,
+            dict_target,
+            arr_lndu_constraints_inf[i],
+            arr_lndu_constraints_sup[i],
+            area = 1.0, # everything's already been normalized
+            x_proj_unadj = x_next_unadj,
+            solver = "quadprog",
+        )
+
+        qs[i] = arr_transition_adj
+        x = np.matmul(x, qs[i])
+
+        """
+        print(scalars_to_adj)
 
         for j, z in enumerate(inds_to_modify):
 
@@ -1581,6 +1736,7 @@ def transformation_support_lndu_transition_to_category_targets_single_region(
 
         qs[i] = model_afolu.adjust_transition_matrix(qs[i], dict_adj)
         x = np.dot(x, qs[i])
+        """
 
         arr_land_use_prevalence_out_with_intervention[i, :] = x
 
@@ -1677,8 +1833,12 @@ def transformation_lndu_increase_silvopasture(
     )
 
     # get the sequestration factor variables
-    modvar_frst_sf = model_attributes.get_variable(model_afolu.modvar_frst_sq_co2, )
-    modvar_lndu_sf = model_attributes.get_variable(model_afolu.modvar_lndu_sf_co2, )
+    modvar_frst_sf = model_attributes.get_variable( 
+        model_afolu.modvar_frst_sq_co2, 
+    )
+    modvar_lndu_sf = model_attributes.get_variable(
+        model_afolu.modvar_lndu_sf_co2, 
+    )
 
     # field to extract factors from and to mix factors into
     field_frst_sf = modvar_frst_sf.build_fields(

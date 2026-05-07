@@ -957,7 +957,9 @@ class Transformers:
         # check if baseline includes partial land use reallocation factor
         baseline_with_lurf = self.config.get(
             f"{self.key_config_baseline}.{self.key_config_magnitude_lurf}"
-        ) > 0.0
+        ) 
+        if sf.isnumber(baseline_with_lurf):
+            baseline_with_lurf = baseline_with_lurf > 0.0
 
 
         ##  SET PROPERTIES
@@ -2962,23 +2964,25 @@ class Transformers:
 
         self.categories_entc_max_investment_ramp = categories_entc_max_investment_ramp
 
+
         ##  AFOLU BASE
 
-        # set land use reallocation factor
-        df_out = tbg.transformation_general(
-            df_out,
-            self.model_attributes,
-            {
-                self.model_afolu.modvar_lndu_reallocation_factor: {
-                    "bounds": (0.0, 1.0),
-                    "magnitude": magnitude_lurf,
-                    "magnitude_type": "final_value",
-                    "vec_ramp": vec_implementation_ramp
-                }
-            },
-            field_region = self.key_region,
-            strategy_id = strat,
-        )
+        # set land use reallocation factor if the baseline with lurf isn't None
+        if self.baseline_with_lurf is not None:
+            df_out = tbg.transformation_general(
+                df_out,
+                self.model_attributes,
+                {
+                    self.model_afolu.modvar_lndu_reallocation_factor: {
+                        "bounds": (0.0, 1.0),
+                        "magnitude": magnitude_lurf,
+                        "magnitude_type": "final_value",
+                        "vec_ramp": vec_implementation_ramp
+                    }
+                },
+                field_region = self.key_region,
+                strategy_id = strat,
+            )
 
 
         ##  CIRCULAR ECONOMY BASE
@@ -4055,6 +4059,10 @@ class Transformers:
             df_input,
         )
 
+        # if baseline lurf is explicit, assume this is explicit as well
+        if self.baseline_with_lurf is None:
+            return df_out
+        
         # if baseline includes LURF, don't modify unless forced to do so
         if (not self.baseline_with_lurf) | force:
             df_out = tbg.transformation_general(
@@ -6461,7 +6469,7 @@ class Transformers:
             df_input,
         )
 
-        magnitude = self.bounded_real_magnitude(magnitude, 0.5)
+        magnitude = self.bounded_real_magnitude(magnitude, 0.75)
 
         df_strat_cur = tbe.transformation_scoe_decrease_demand_for_appliance_energy(
             df_input,
