@@ -103,6 +103,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 from sisepuede.manager.sisepuede_models import SISEPUEDEModels
+from sisepuede.calibration._df_helpers import attach_year_column
 from sisepuede.calibration._simplex_registry import SimplexRegistry
 
 try:
@@ -699,29 +700,14 @@ class SensitivityRunner:
     def _attach_year(self, df_out: pd.DataFrame) -> pd.DataFrame:
         """Merge the 'year' column from df_baseline into df_out by time_period.
 
-        IEACrosswalk.aggregate_sisepuede() expects a 'year' column.  The model
+        IEACrosswalk.aggregate_sisepuede() expects a 'year' column. The model
         outputs 'time_period'; the year mapping is taken from df_baseline.
-
-        Raises
-        ------
-        ValueError
-            If df_baseline does not contain a 'year' column.
+        Raises ValueError if df_baseline lacks 'year' (SensitivityRunner
+        cannot proceed without it).
         """
-        if "year" in df_out.columns:
-            return df_out
-
-        if "year" not in self.df_baseline.columns:
-            raise ValueError(
-                "Cannot attach 'year' to model output: df_baseline does not "
-                "have a 'year' column. Add it (mapping time_period -> calendar "
-                "year) before constructing SensitivityRunner."
-            )
-
-        year_map = (
-            self.df_baseline[["time_period", "year"]]
-            .drop_duplicates()
+        return attach_year_column(
+            df_out, self.df_baseline, raise_if_missing_source=True,
         )
-        return df_out.merge(year_map, on="time_period", how="left")
 
     def _run_single(
         self,
