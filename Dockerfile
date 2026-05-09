@@ -4,11 +4,14 @@
 # 2. use `conda-pack` to transfer to Julia image
 # - file can be improved with some work
 #   - e.g., move to Julia Alpine, but will require more precise installation
-
+# SHIFT TO ANACONDA IMAGE 
 
 ##  (1) BUILD CONDA ENVIRONMENT
 
-FROM continuumio/miniconda3 AS build
+FROM anaconda/miniconda AS build
+
+# see https://hub.docker.com/r/anaconda/miniconda for auto accept
+ENV CONDA_PLUGINS_AUTO_ACCEPT_TOS=true
 
 # see https://jcristharif.com/conda-docker-tips.html for use of this environment variable
 ENV PYTHONDONTWRITEBYTECODE=true
@@ -36,7 +39,7 @@ RUN /venv/bin/conda-unpack
 
 ##  (2) COPY TO JULIA BUILD
 
-FROM julia:1.11.5-bullseye AS final
+FROM julia:1.11.6-bullseye AS final
 COPY --from=build /venv /venv
 WORKDIR /sisepuede
 
@@ -50,7 +53,7 @@ SHELL ["/bin/bash", "-c"]
 RUN source /venv/bin/activate \
     && pip install juliacall==0.9.25 \
     && pip install juliapkg==0.1.17 \
-    && pip install git+https://github.com/jcsyme/sisepuede.git@bf4f954ef6747d8d1adac257e6b2395b42ba5fa0
+    && pip install git+https://github.com/jcsyme/sisepuede.git@4ea55d143ed19633aeb3bbfcd98c0944203ec9e0
     
 # import after installation to ensure julia is installed
 RUN source /venv/bin/activate \
@@ -64,7 +67,6 @@ RUN source /venv/bin/activate \
 # - feed a script from host using -c
 SHELL ["conda", "run", "-n", "sisepuede", "/bin/bash", "-c"]
 ENTRYPOINT ["/bin/bash"]
-
 
 
 
