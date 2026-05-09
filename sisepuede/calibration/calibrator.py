@@ -90,9 +90,18 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
+from sisepuede.calibration._df_helpers import (
+    attach_year_column,
+    sum_fields_at_time_period,
+)
 from sisepuede.calibration.calibration_group import CalibrationGroup, CalibrationPlan
 from sisepuede.calibration.sensitivity import VariableSpec, apply_perturbations
 from sisepuede.calibration._simplex_registry import SimplexRegistry
+from sisepuede.calibration.qp_phase2 import (
+    apply_qp_solution,
+    build_qp_inputs,
+    solve_phase2_qp,
+)
 
 
 def _resolve_registry(models, crosswalk) -> SimplexRegistry:
@@ -253,26 +262,6 @@ class Calibrator:
 
         return int(match.iloc[0])
 
-    def _row_at_tp(
-        self,
-        df_out: pd.DataFrame,
-        time_period: int,
-        fields: List[str],
-    ) -> float:
-        """Sum fields in df_out at a specific time_period row.
-
-        Returns 0.0 if the time period is not found or no fields are present.
-        """
-        available = [f for f in fields if f in df_out.columns]
-        if not available:
-            return 0.0
-
-        mask = df_out["time_period"] == time_period
-        if not mask.any():
-            return 0.0
-
-        return float(df_out.loc[mask, available].sum(axis=1).iloc[0])
-
     def _is_simplex_constrained_group(self, group: CalibrationGroup) -> bool:
         """Return True if any column in `group` is part of a simplex group.
 
@@ -371,7 +360,7 @@ class Calibrator:
                 continue
 
             # Measure current model output at the target time period
-            current_ssp = self._row_at_tp(df_out, time_period, ssp_fields)
+            current_ssp = sum_fields_at_time_period(df_out, time_period, ssp_fields)
 
             if current_ssp == 0.0:
                 warnings.warn(
@@ -486,8 +475,8 @@ class Calibrator:
                             "status": "skipped_no_crosswalk", "target": (bal, prod)})
                 continue
 
-            current_fuel_ssp  = self._row_at_tp(df_out, time_period, ssp_fuel_fields)
-            current_total_ssp = self._row_at_tp(df_out, time_period, ssp_total_fields)
+            current_fuel_ssp  = sum_fields_at_time_period(df_out, time_period, ssp_fuel_fields)
+            current_total_ssp = sum_fields_at_time_period(df_out, time_period, ssp_total_fields)
 
             if current_total_ssp == 0.0:
                 log.append({"group": group.name, "phase": 2,
@@ -565,6 +554,102 @@ class Calibrator:
         return df_out_calibrated, log
 
     # ------------------------------------------------------------------
+    #   Phase 2 (v2) — fuel mix via Quadratic Program
+    # ------------------------------------------------------------------
+
+    def _phase2_fuel_mix_qp(
+        self,
+        df_in: pd.DataFrame,
+        plan: CalibrationPlan,
+        time_period: int,
+        gamma: float,
+        enforce_varspec_bounds: bool = False,
+    ) -> Tuple[pd.DataFrame, List[dict]]:
+        """v2 Phase 2: solve a single QP for all simplex fractions at once.
+
+        Replaces the v1 per-fraction direct ratio with the regularised QP.
+        One model run is used to measure current sector and subsector totals,
+        then qp_phase2 builds A, b, f_default, sector_indices, solves, and
+        writes the solution back via Aitchison renormalisation.
+
+        When `enforce_varspec_bounds` is True, the QP additionally constrains
+        each fraction to ``[lb * f_default, ub * f_default]`` using the
+        VariableSpec bounds attached to each frac column (the same bounds
+        LHS uses). Default False keeps the v2-as-planned behaviour with
+        gamma as the only parameter restraining movement.
+        """
+        log: List[dict] = []
+
+        # 1. One model run to measure current outputs ─────────────────────
+        print("    Running model (Phase 2 baseline, QP)...", end=" ", flush=True)
+        df_out = self._run_model(df_in)
+        print("done")
+
+        # 2. Build QP inputs ──────────────────────────────────────────────
+        qp = build_qp_inputs(
+            plan             = plan,
+            df_in            = df_in,
+            df_out           = df_out,
+            time_period      = time_period,
+            crosswalk        = self.crosswalk,
+            iea_tj           = self._iea_tj,
+            simplex_registry = self.simplex_registry,
+        )
+        log.extend(qp["skipped"])
+
+        if len(qp["columns"]) == 0:
+            warnings.warn(
+                "Phase 2 QP — no eligible simplex groups found; nothing to do."
+            )
+            return df_in.copy(), log
+
+        # 3. Solve ────────────────────────────────────────────────────────
+        bounds_msg = " +varspec bounds" if enforce_varspec_bounds else ""
+        print(
+            f"    Solving QP: m={qp['A'].shape[0]} targets, "
+            f"n={qp['A'].shape[1]} fracs, "
+            f"{len(qp['sector_indices'])} simplex groups, "
+            f"gamma={gamma}{bounds_msg}..."
+        )
+        f_solved = solve_phase2_qp(
+            A                      = qp["A"],
+            b                      = qp["b"],
+            f_default              = qp["f_default"],
+            sector_indices         = qp["sector_indices"],
+            gamma                  = gamma,
+            enforce_varspec_bounds = enforce_varspec_bounds,
+            lb_per_col             = qp["lb_per_col"],
+            ub_per_col             = qp["ub_per_col"],
+        )
+
+        # 4. Diagnostics: predicted residual at the solution ──────────────
+        residual_pre  = float(np.linalg.norm(qp["A"] @ qp["f_default"] - qp["b"]))
+        residual_post = float(np.linalg.norm(qp["A"] @ f_solved        - qp["b"]))
+        log.append({
+            "phase":                  2,
+            "status":                 "qp_solved",
+            "n_targets":              int(qp["A"].shape[0]),
+            "n_fracs":                int(qp["A"].shape[1]),
+            "gamma":                  gamma,
+            "enforce_varspec_bounds": enforce_varspec_bounds,
+            "residual_pre":           round(residual_pre, 6),
+            "residual_post":          round(residual_post, 6),
+        })
+
+        # 5. Apply solution to df_in ──────────────────────────────────────
+        df_calibrated, apply_log = apply_qp_solution(
+            df_in            = df_in,
+            columns          = qp["columns"],
+            f_solved         = f_solved,
+            f_default        = qp["f_default"],
+            plan             = plan,
+            simplex_registry = self.simplex_registry,
+        )
+        log.extend(apply_log)
+
+        return df_calibrated, log
+
+    # ------------------------------------------------------------------
     #   Public calibration API
     # ------------------------------------------------------------------
 
@@ -572,8 +657,10 @@ class Calibrator:
         self,
         df_in: pd.DataFrame,
         plan: CalibrationPlan,
-        option: int = 0, 
+        option: int = 0,
         n_iter: int = 2,
+        gamma: float = 100.0,
+        enforce_varspec_bounds: bool = False,
     ) -> Tuple[pd.DataFrame, List[dict]]:
         """Run n_iter rounds of Phase 1 (sector totals) + Phase 2 (fuel mix).
 
@@ -585,9 +672,24 @@ class Calibrator:
         plan : CalibrationPlan
             Output of build_energy_calibration_plan(model_attributes).
         option : int
-            - 0 runs Phase 1 + Phase 2
-            - 1 runs Phase 1 only
-            - 2 runs Phase 2 only
+            - 0 runs v1 Phase 1 + v1 Phase 2 (direct ratio)
+            - 1 runs Phase 1 only (v1)
+            - 2 runs Phase 2 only (v1 direct ratio)
+            - 3 runs v2: Phase 1 (unchanged) + Phase 2 QP (regularised)
+            - 4 runs Phase 2 QP only (v2)
+        gamma : float
+            Regularisation weight for the v2 Phase 2 QP. Higher = stay
+            closer to the model defaults; lower = follow IEA more
+            aggressively. Ignored unless option in (3, 4). Default 100.0.
+        enforce_varspec_bounds : bool
+            When True, the v2 Phase 2 QP additionally constrains each
+            fraction to ``[lb * f_default, ub * f_default]`` using the
+            VariableSpec bounds attached to each frac column. The same
+            bounds LHS uses, so calibration and sensitivity stay coherent.
+            Hard bounds may make the QP infeasible if IEA demands a move
+            larger than the bound allows -- the solver raises with a
+            message pointing at gamma / lb / ub. Default False.
+            Ignored unless option in (3, 4).
         n_iter : int
             Number of full Phase 1 + Phase 2 iterations. Default 2.
             - 1 iteration is usually sufficient for sector totals (Phase 1).
@@ -656,9 +758,37 @@ class Calibrator:
                     "iteration": it + 1,
                     "phase2":    log2,
                 })
+            elif option == 3:
+                print("  Phase 1 — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
+
+                print("  Phase 2 (v2) — fuel mix via QP:")
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                    "phase2":    log2,
+                })
+            elif option == 4:
+                print("  Phase 2 (v2) only — fuel mix via QP:")
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase2":    log2,
+                })
             else:
                 warnings.warn(
-                    f"Calibration option {option} must be 0, 1 or 2. "
+                    f"Calibration option {option} must be in 0..4. "
                     "Returning same input DataFrame, and empty log."
                 )
                 continue
@@ -705,9 +835,7 @@ class Calibrator:
         df_out  = self._run_model(df_in)
 
         # Attach year column (IEACrosswalk.aggregate_sisepuede needs it)
-        if "year" not in df_out.columns and "year" in df_in.columns:
-            year_map = df_in[["time_period", "year"]].drop_duplicates()
-            df_out   = df_out.merge(year_map, on="time_period", how="left")
+        df_out = attach_year_column(df_out, df_in)
 
         df_ssp  = self.crosswalk.aggregate_sisepuede(df_out)
         return self.crosswalk.build_comparison(
