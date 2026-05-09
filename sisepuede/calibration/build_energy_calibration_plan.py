@@ -472,13 +472,24 @@ def build_energy_calibration_plan(
         "WINDSOLAR":("INDUSTRY", "WINDSOLAR"),
     }
 
+    ##  Exclude agriculture_and_livestock: it is its own IEA target
+    ##  (AGRICULT, AGRICULT) handled by the agricult__agricult Phase-1 group,
+    ##  and the IEA (INDUSTRY, *) crosswalk explicitly excludes agriculture.
+    ##  Including frac_inen_energy_agriculture_and_livestock_{fuel} here would
+    ##  let Phase 2 drag agriculture's fuel mix to match an INDUSTRY target
+    ##  that doesn't include agriculture, distorting agriculture's frac
+    ##  trajectory via Aitchison renormalisation. IEA has no
+    ##  (AGRICULT, FUEL) breakdown to calibrate against, so agriculture's
+    ##  fuel mix is intentionally left at the model defaults.
+    inen_cats_excl_ag = [c for c in inen_cats if c != "agriculture_and_livestock"]
+
     for iea_fuel, target in _INEN_IEA_TARGETS.items():
         fuel_suffixes = _IEA_FUEL_MAP.get(iea_fuel, [])
         inen_vars: List[str] = []
         simplex_ids: List[int] = []
         ids_seen: Set[int] = set()
 
-        for cat in inen_cats:
+        for cat in inen_cats_excl_ag:
             for suf in fuel_suffixes:
                 v = f"frac_inen_energy_{cat}_{suf}"
                 if v in fields_in:
@@ -501,8 +512,9 @@ def build_energy_calibration_plan(
             constraint_type   = "simplex",
             simplex_group_ids = simplex_ids,
             notes             = f"Fuel fraction for {iea_fuel} across all INEN "
-                                f"categories -> {target[0]}x{target[1]}.  Simplex "
-                                f"within each industry category (fracs sum to 1 per cat).",
+                                f"categories except agriculture_and_livestock "
+                                f"-> {target[0]}x{target[1]}.  Simplex within "
+                                f"each industry category (fracs sum to 1 per cat).",
         ))
 
     # ------------------------------------------------------------------ #
