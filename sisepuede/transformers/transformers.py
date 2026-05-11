@@ -746,6 +746,7 @@ class Transformers:
         self.code_baseline = code_baseline
         self.config = config
         self.key_config_alpha_logistic = "alpha_logistic"
+        self.key_config_apply_renewable_target = "apply_renewable_target"
         self.key_config_baseline = key_baseline
         self.key_config_cats_entc_max_investment_ramp = "categories_entc_max_investment_ramp"
         self.key_config_cats_entc_pps_to_cap = "categories_entc_pps_to_cap"
@@ -756,6 +757,7 @@ class Transformers:
         self.key_config_general = key_general
         self.key_config_magnitude_lurf = "magnitude_lurf" # MUST be same as kwarg in _trfunc_baseline
         self.key_config_n_tp_ramp = "n_tp_ramp"
+        self.key_config_scale_non_renewables_to_match_surplus_msp = "scale_non_renewables_to_match_surplus_msp"
         self.key_config_tp_0_ramp = "tp_0_ramp" 
         self.key_config_vec_implementation_ramp = "vec_implementation_ramp"
         self.key_config_vir_renewable_cap_delta_frac = "vir_renewable_cap_delta_frac"
@@ -2873,11 +2875,13 @@ class Transformers:
 
     def _trfunc_baseline(self,
         df_input: pd.DataFrame,
+        apply_renewable_target: Union[bool, None] = None,
         categories_entc_max_investment_ramp: Union[List[str], None] = None,
         categories_entc_pps_to_cap: Union[List[str], None] = None,
         categories_entc_renewable: Union[List[str], None] = None,
         dict_entc_renewable_target_msp_baseline: dict = {},
         magnitude_lurf: Union[float, None] = None,
+        scale_non_renewables_to_match_surplus_msp: Union[bool, None] = None,
         strat: Union[int, None] = None,
         vec_implementation_ramp: Union[np.ndarray, Dict[str, int], None] = None,
     ) -> pd.DataFrame:
@@ -2891,6 +2895,9 @@ class Transformers:
 
         Keyword Arguments
         -----------------
+        apply_renewable_target : bool
+            Apply a renewable energy target? If False, no renewable target
+            variables will be used. 
         - categories_entc_max_investment_ramp: categories to cap investments in
         - categories_entc_pps_to_cap: ENTC categories to cap at current levels 
             when projecting minimum share of production (MSP) forward.
@@ -2902,6 +2909,8 @@ class Transformers:
             base case.
         - magnitude_lurf: magnitude of the land use reallocation factor under
             baseline
+        scale_non_renewables_to_match_surplus_msp : bool
+            Scale renewables if applying a baseline target? 
         - vec_implementation_ramp: optional vector specifying the implementation
             scalar ramp for the transformation. If None, defaults to a uniform 
             ramp that starts at the time specified in the configuration.
@@ -2944,12 +2953,28 @@ class Transformers:
             
         magnitude_lurf = self.bounded_real_magnitude(magnitude_lurf, 0.0)
 
-        
+
+        ##  RENEWABLE TARGETS
+
+        if apply_renewable_target is not None:
+            apply_renewable_target = self.config.get(
+                f"{self.key_config_baseline}.{self.key_config_apply_renewable_target}",
+                return_on_none = True,
+            )
+
+        # scale?
+        if scale_non_renewables_to_match_surplus_msp is None:
+            scale_non_renewables_to_match_surplus_msp = self.config.get(
+                f"{self.key_config_baseline}.{self.key_config_scale_non_renewables_to_match_surplus_msp}",
+                return_on_none = True,
+            )
+
         # dictionary mapping to target minimum shares of production
         dict_entc_renewable_target_msp_baseline = self.get_entc_dict_renewable_target_msp(
             cats_renewable = categories_entc_renewable,
             dict_entc_renewable_target_msp = dict_entc_renewable_target_msp_baseline,
         )
+
 
         # characteristics for BASELINE MSP ramp 
         (
@@ -2961,7 +2986,7 @@ class Transformers:
             categories_entc_max_investment_ramp = categories_entc_max_investment_ramp,
             vec_implementation_ramp = vec_implementation_ramp,
         )
-
+        
         self.categories_entc_max_investment_ramp = categories_entc_max_investment_ramp
 
 
@@ -3002,24 +3027,25 @@ class Transformers:
         # NEW ADDITION (2023-09-27): ALLOW FOR BASELINE INCREASE IN RENEWABLE ADOPTION
 
         target_renewables_value_min = sum(dict_entc_renewable_target_msp_baseline.values())
-
-        # apply transformation
-        df_out = tbe.transformation_entc_renewable_target(
-            df_out,
-            target_renewables_value_min,
-            vec_implementation_ramp,
-            self.model_enerprod,
-            dict_cats_entc_max_investment = dict_entc_renewable_target_cats_max_investment,
-            field_region = self.key_region,
-            include_target = False, # only want to adjust MSPs in line with this
-            magnitude_as_floor = True,
-            magnitude_renewables = dict_entc_renewable_target_msp_baseline,
-            scale_non_renewables_to_match_surplus_msp = True,
-            strategy_id = strat,
-            #**kwargs,
-        )
-
-
+        
+        if apply_renewable_target:
+            # apply transformation
+            df_out = tbe.transformation_entc_renewable_target(
+                df_out,
+                target_renewables_value_min,
+                vec_implementation_ramp,
+                self.model_enerprod,
+                dict_cats_entc_max_investment = dict_entc_renewable_target_cats_max_investment,
+                field_region = self.key_region,
+                include_target = False, # only want to adjust MSPs in line with this
+                magnitude_as_floor = True,
+                magnitude_renewables = dict_entc_renewable_target_msp_baseline,
+                scale_non_renewables_to_match_surplus_msp = scale_non_renewables_to_match_surplus_msp,
+                strategy_id = strat,
+                #**kwargs,
+            )
+        
+        
         ##  IPPU BASE
 
 
@@ -7361,6 +7387,7 @@ class Transformers:
         dict_categories_target_out = self.check_trns_tech_allocation_dict(
             dict_categories_target,
             {
+
                 "road_heavy_regional": 1.0,
             }
         )

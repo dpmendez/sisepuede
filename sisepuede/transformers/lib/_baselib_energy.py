@@ -1330,8 +1330,9 @@ def transformation_entc_renewable_target(
         if len(dict_cats_renewable_all) == 0:
             df_out.append(df)
             continue
-
-            
+        
+        #keyu = list(dict_tech_info.keys())
+        #print(keyu)
         # only focus on electricity generation
         cats_renewable = [
             x for x in attr_entc.key_values 
