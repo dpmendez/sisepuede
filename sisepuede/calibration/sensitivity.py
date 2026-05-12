@@ -895,7 +895,7 @@ class SensitivityRunner:
 def sensitivity_scores(
     result: SensitivityResult,
     years: List[int],
-    output_col: str = "rel_error_iea",
+    output_col: str = "rel_err",
 ) -> pd.DataFrame:
     """Rank input variables by their influence on IEA calibration targets.
 
@@ -917,8 +917,8 @@ def sensitivity_scores(
         before correlation is computed.
     output_col : str
         Column from iea_comparison to use as the output signal.
-        Default "ratio_sisepuede_over_iea".
-        Alternatives: "value_sisepuede_tj", "diff_sisepuede_iea".
+        Default "ratio".
+        Alternatives: "value_sisepuede_tj", "diff".
 
     Returns
     -------
@@ -975,7 +975,7 @@ def linearity_check(
     iea_balance_code: str,
     iea_product_code: str,
     years: List[int],
-    output_col: str = "rel_err_iea",
+    output_col: str = "rel_err",
 ):
     """Scatter plot to check whether the input->output relationship is linear.
 
@@ -1000,7 +1000,7 @@ def linearity_check(
         Calendar years to include. Output values are averaged across years.
     output_col : str
         Column from iea_comparison to use on the y-axis.
-        Default "rel_error_iea".
+        Default "rel_err".
 
     Returns
     -------

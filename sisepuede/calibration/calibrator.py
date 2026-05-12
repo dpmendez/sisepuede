@@ -785,7 +785,7 @@ class Calibrator:
         gamma : float
             Regularisation weight for the v2 Phase 2 QP. Higher = stay
             closer to the model defaults; lower = follow IEA more
-            aggressively. Ignored unless option in (3, 4). Default 100.0.
+            aggressively. Ignored unleass option in (3, 4). Default 100.0.
         enforce_varspec_bounds : bool
             When True, the v2 Phase 2 QP additionally constrains each
             fraction to ``[lb * f_default, ub * f_default]`` using the
@@ -932,7 +932,7 @@ class Calibrator:
             Output of IEACrosswalk.build_comparison(). Key columns:
             iea_balance_code, iea_product_code, year,
             value_iea_tj, value_sisepuede_tj,
-            ratio_sisepuede_over_iea, rel_err_iea.
+            ratio, rel_err.
         """
         year_min = year_min or self.year_target
         year_max = year_max or self.year_target
