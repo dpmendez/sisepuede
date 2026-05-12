@@ -551,7 +551,104 @@ class Calibrator:
             simplex_registry=self.simplex_registry,
         )
 
+        # ── 4. Post-condition: simplex sums still equal 1 ───────────────────
+        self._verify_simplex_sums(
+            df_out_calibrated,
+            touched_columns = list(variable_scales.keys()),
+            log             = log,
+            version         = "v1",
+        )
+
         return df_out_calibrated, log
+
+    # ------------------------------------------------------------------
+    #   Shared post-condition: simplex sums still equal 1
+    # ------------------------------------------------------------------
+
+    def _verify_simplex_sums(
+        self,
+        df: pd.DataFrame,
+        touched_columns: List[str],
+        log: List[dict],
+        version: str,
+    ) -> None:
+        """Check sum-to-1 for every simplex group touched by Phase 2.
+
+        Findings are written to `log` (one entry per non-ok group plus a
+        single summary record). Severity bands:
+
+            "ok"          : numerical noise, no log entry written
+            "warn"        : small drift, warnings.warn at low alarm
+            "strong_warn" : notable drift, warnings.warn at higher alarm
+            "severe"      : corruption -> raises RuntimeError
+
+        We never silently continue past a "severe" violation: it means
+        Aitchison renormalisation (v1) or the QP equality constraint (v2)
+        is not actually being enforced, so the downstream model run would
+        be operating on a corrupted simplex and any IEA comparison
+        afterwards would be meaningless.
+        """
+        findings = self.simplex_registry.check_sums(
+            df, columns_subset=touched_columns,
+        )
+
+        severe = [r for r in findings if r["severity"] == "severe"]
+        strong = [r for r in findings if r["severity"] == "strong_warn"]
+        warn   = [r for r in findings if r["severity"] == "warn"]
+
+        # Per-group log entries for anything non-ok
+        for r in severe + strong + warn:
+            log.append({
+                "phase":             2,
+                "version":           version,
+                "status":            f"simplex_check_{r['severity']}",
+                "group_id":          r["group_id"],
+                "n_columns":         r["n_columns"],
+                "max_abs_dev":       round(r["max_abs_dev"], 8),
+                "time_period_worst": r["time_period_worst"],
+            })
+
+        # Summary log entry
+        log.append({
+            "phase":               2,
+            "version":             version,
+            "status":              "simplex_check_summary",
+            "n_groups_checked":    len(findings),
+            "n_warn":              len(warn),
+            "n_strong_warn":       len(strong),
+            "n_severe":            len(severe),
+        })
+
+        # User-visible warnings for soft violations
+        for r in warn:
+            warnings.warn(
+                f"Phase 2 ({version}): simplex group {r['group_id']} sum-to-1 "
+                f"drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']}. Small but worth noting."
+            )
+        for r in strong:
+            warnings.warn(
+                f"Phase 2 ({version}): simplex group {r['group_id']} sum-to-1 "
+                f"NOTABLE drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']} (n_cols={r['n_columns']}). "
+                "Check that all simplex members are present in df_in and that "
+                "no upstream step dropped or aliased columns."
+            )
+
+        # Hard failure on severe corruption
+        if severe:
+            worst = severe[0]  # findings sorted by max_abs_dev desc
+            raise RuntimeError(
+                f"Phase 2 ({version}): simplex constraint corruption detected. "
+                f"{len(severe)} group(s) violate sum-to-1 by more than 1%. "
+                f"Worst: group_id={worst['group_id']}, "
+                f"|sum-1|={worst['max_abs_dev']:.4f} at time_period="
+                f"{worst['time_period_worst']} (n_cols={worst['n_columns']}, "
+                f"n_missing={worst['n_cols_missing']}). "
+                "The calibrated DataFrame would be unsafe for further model "
+                "runs. Inspect the log entries with status='simplex_check_*' "
+                "for the full list."
+            )
 
     # ------------------------------------------------------------------
     #   Phase 2 (v2) — fuel mix via Quadratic Program
@@ -646,6 +743,14 @@ class Calibrator:
             simplex_registry = self.simplex_registry,
         )
         log.extend(apply_log)
+
+        # 6. Post-condition: simplex sums still equal 1 ───────────────────
+        self._verify_simplex_sums(
+            df_calibrated,
+            touched_columns = qp["columns"],
+            log             = log,
+            version         = "v2",
+        )
 
         return df_calibrated, log
 

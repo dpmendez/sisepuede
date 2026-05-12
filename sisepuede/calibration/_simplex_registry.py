@@ -61,7 +61,10 @@ The two directions are kept in sync internally: you can pass either
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+import numpy as np
+import pandas as pd
 
 
 class SimplexRegistry:
@@ -263,6 +266,124 @@ class SimplexRegistry:
                 f"but are not registered in any simplex group "
                 f"(check ModelAttributes / attribute-table CSVs): {missing}"
             )
+
+    def check_sums(
+        self,
+        df: pd.DataFrame,
+        columns_subset: Optional[Iterable[str]] = None,
+        tol_ok:     float = 1e-6,
+        tol_warn:   float = 1e-3,
+        tol_severe: float = 1e-2,
+    ) -> List[Dict[str, Any]]:
+        """Verify per-simplex-group sum-to-1 on a SISEPUEDE input DataFrame.
+
+        For each simplex group whose columns appear in ``df``, computes the
+        per-row sum and the worst absolute deviation from 1.0. Pure
+        function: returns findings, never warns or raises. The caller
+        decides what to do with each severity band.
+
+        Severity bands (on max absolute deviation across rows):
+
+            |dev| < tol_ok                      -> "ok"
+            tol_ok <= |dev| < tol_warn          -> "warn"
+            tol_warn <= |dev| < tol_severe      -> "strong_warn"
+            |dev| >= tol_severe                 -> "severe"
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input frame containing simplex columns (and typically
+            ``time_period`` for diagnostics).
+        columns_subset : Iterable[str] | None
+            Restrict the check to simplex groups that include at least one
+            of these columns. Use this to focus on groups that calibration
+            actually touched; groups left alone are not interesting.
+            ``None`` checks every simplex group whose columns appear in
+            ``df``.
+        tol_ok, tol_warn, tol_severe : float
+            Cumulative thresholds. Must satisfy 0 <= tol_ok < tol_warn <
+            tol_severe.
+
+        Returns
+        -------
+        List[dict] sorted by ``max_abs_dev`` descending. Each entry:
+
+            {"group_id":          int,
+             "n_columns":         int,            # cols actually summed
+             "n_cols_missing":    int,            # registered but absent from df
+             "max_abs_dev":       float,
+             "time_period_worst": int | None,
+             "severity":          "ok" | "warn" | "strong_warn" | "severe"}
+        """
+        if not (0 <= tol_ok < tol_warn < tol_severe):
+            raise ValueError(
+                "Thresholds must satisfy 0 <= tol_ok < tol_warn < tol_severe; "
+                f"got tol_ok={tol_ok}, tol_warn={tol_warn}, tol_severe={tol_severe}."
+            )
+
+        # Decide which simplex groups to inspect.
+        if columns_subset is None:
+            gids_to_check = [
+                gid for gid, cols in self._group_to_fields.items()
+                if any(c in df.columns for c in cols)
+            ]
+        else:
+            seen: set = set()
+            gids_to_check: List[int] = []
+            for c in columns_subset:
+                gid = self._field_to_group.get(c)
+                if gid is not None and gid not in seen:
+                    seen.add(gid)
+                    gids_to_check.append(gid)
+
+        if not gids_to_check:
+            return []
+
+        has_tp = "time_period" in df.columns
+        findings: List[Dict[str, Any]] = []
+
+        for gid in gids_to_check:
+            registered = self._group_to_fields.get(gid, [])
+            present = [c for c in registered if c in df.columns]
+            if not present:
+                continue
+            missing = len(registered) - len(present)
+
+            row_sums = df[present].sum(axis=1).to_numpy(dtype=float)
+            abs_dev = np.abs(row_sums - 1.0)
+            if abs_dev.size == 0:
+                continue
+
+            worst_idx = int(np.argmax(abs_dev))
+            max_dev = float(abs_dev[worst_idx])
+
+            if max_dev < tol_ok:
+                severity = "ok"
+            elif max_dev < tol_warn:
+                severity = "warn"
+            elif max_dev < tol_severe:
+                severity = "strong_warn"
+            else:
+                severity = "severe"
+
+            tp_worst: Optional[int] = None
+            if has_tp:
+                try:
+                    tp_worst = int(df["time_period"].iloc[worst_idx])
+                except (ValueError, TypeError):
+                    tp_worst = None
+
+            findings.append({
+                "group_id":          gid,
+                "n_columns":         len(present),
+                "n_cols_missing":    missing,
+                "max_abs_dev":       max_dev,
+                "time_period_worst": tp_worst,
+                "severity":          severity,
+            })
+
+        findings.sort(key=lambda r: r["max_abs_dev"], reverse=True)
+        return findings
 
     def group_partition(self, columns: Iterable[str]) -> Dict[int, List[str]]:
         """Partition an iterable of columns by their simplex group ID.
