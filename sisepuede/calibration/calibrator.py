@@ -982,3 +982,72 @@ class Calibrator:
                     })
 
         return pd.DataFrame(rows)
+
+
+    def summarize_knobs(
+        self,
+        df_baseline: pd.DataFrame,
+        df_calibrated: pd.DataFrame,
+        plan: CalibrationPlan,
+    ) -> pd.DataFrame:
+        """Long-form record of how each calibration knob changed.
+
+        Walks the plan and, for every (group, variable), records the variable's
+        value in df_baseline vs df_calibrated at the time_period that maps to
+        year_target. Phase-1 changes come out as the scalar applied to scalar-
+        group inputs; phase-2 changes come out as the post-Aitchison effective
+        change to each frac_*. Both compose correctly across n_iter.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per (group, variable). Columns:
+            phase, group_name, iea_balance, iea_product, variable,
+            simplex_group_id, initial, final, pct_change.
+        """
+        time_period = self._get_time_period(df_baseline)
+
+        def _val(df: pd.DataFrame, col: str) -> float:
+            sub = df.loc[df["time_period"] == time_period, col]
+            if sub.empty:
+                return float("nan")
+            return float(sub.iloc[0])
+
+        rows: List[dict] = []
+        for group in plan:
+            if not group.iea_targets:
+                continue
+
+            if group.is_simplex:
+                phase = 2
+            else:
+                if self._is_simplex_constrained_group(group):
+                    continue
+                phase = 1
+
+            bal, prod = group.iea_targets[0]
+
+            for col in group.columns:
+                if col not in df_baseline.columns or col not in df_calibrated.columns:
+                    continue
+
+                initial = _val(df_baseline, col)
+                final   = _val(df_calibrated, col)
+                if initial == 0.0 or not np.isfinite(initial):
+                    pct = float("nan")
+                else:
+                    pct = 100.0 * (final - initial) / initial
+
+                rows.append({
+                    "phase":            phase,
+                    "group_name":       group.name,
+                    "iea_balance":      bal,
+                    "iea_product":      prod,
+                    "variable":         col,
+                    "simplex_group_id": self.simplex_registry.group_id(col),
+                    "initial":          initial,
+                    "final":            final,
+                    "pct_change":       pct,
+                })
+
+        return pd.DataFrame(rows)
