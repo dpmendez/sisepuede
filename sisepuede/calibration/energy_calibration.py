@@ -50,9 +50,9 @@ from sisepuede.calibration._plotting import (
     plot_before_after_time_series,
 )
 from sisepuede.calibration._tables import (
-    build_error_table,
     build_improvement_table,
     build_knob_tables,
+    build_values_table,
 )
 
 
@@ -275,10 +275,10 @@ def _save_summary_tables(
     verbose: bool,
 ) -> None:
     _vprint(verbose, "Building LaTeX summary tables...")
-    build_error_table(
+    build_values_table(
         df_comp_baseline, df_comp_calibrated,
         country=iso_country, target_year=target_year,
-        out_path=os.path.join(tables_dir, f"{iso_country}_error_table.tex"),
+        out_path=os.path.join(tables_dir, f"{iso_country}_values_table.tex"),
     )
     build_improvement_table(
         df_comp_baseline, df_comp_calibrated,

@@ -7,11 +7,11 @@ Three formatters operate on the comparison frames produced by
 ``Calibrator.evaluate()`` and the long-form knob frame produced by
 ``Calibrator.summarize_knobs()``:
 
-    build_error_table        — proportional deviation per (balance, product)
-                               at a target year, plus an overall unweighted
-                               mean.
-    build_improvement_table  — before/after errors with a colour-graded ratio
-                               column (green = improvement, red = regression).
+    build_values_table       — IEA target and SSP aggregate (before/after) in
+                               TJ per (balance, product) at a target year.
+    build_improvement_table  — per-pair error before/after with a colour-graded
+                               ratio column and a signed Δ (pp). Footer reports
+                               the overall unweighted-mean calibration error.
     build_knob_tables        — one table per (balance, product); rows
                                sub-grouped by simplex_group_id and the
                                ``% change`` column shaded by magnitude
@@ -39,11 +39,12 @@ import pandas as pd
 # Improvement table — ratio = err_after / err_before
 # (lower is better; > 1 means calibration made the pair worse).
 _RATIO_BUCKETS = [
-    (0.5,        "green!60"),
-    (0.9,        "green!25"),
-    (1.1,        None),       # neutral band — no fill
-    (1.5,        "red!25"),
-    (float("inf"), "red!60"),
+    # Both ends mirror the same recipe: shift hue, darken, fade.
+    (0.5,          "green!60!teal!70!black!40"),
+    (0.9,          "green!60!teal!70!black!20"),
+    (1.1,          None),                             # neutral band — no fill
+    (1.5,          "red!85!orange!75!black!20"),
+    (float("inf"), "red!85!orange!75!black!40"),
 ]
 
 # Knob table — colour scale on |pct_change|.
@@ -170,36 +171,52 @@ def _merged_errors(
 
 
 # ---------------------------------------------------------------------------
-#   1) Error table
+#   1) Values table
 # ---------------------------------------------------------------------------
 
-def build_error_table(
+def _pair_values(df_comp: pd.DataFrame, year: int, col_out: str) -> pd.DataFrame:
+    """Return (balance, product) -> IEA target and SSP aggregate at a year."""
+    d = df_comp.loc[df_comp["year"] == year, [
+        "iea_balance_code", "iea_product_code",
+        "value_iea_tj", "value_sisepuede_tj",
+    ]].copy()
+    return d.rename(columns={"value_sisepuede_tj": col_out})
+
+
+def build_values_table(
     df_comp_baseline: pd.DataFrame,
     df_comp_calibrated: pd.DataFrame,
     country: str,
     target_year: int,
     out_path: Optional[str] = None,
 ) -> str:
-    """LaTeX table of per-(balance, product) absolute proportional deviation
-    before/after calibration, with an unweighted-mean footer row.
-    """
-    df = _merged_errors(df_comp_baseline, df_comp_calibrated, target_year)
+    """LaTeX table of the IEA target and the SSP aggregate (before/after
+    calibration) in TJ for each (balance, product) at ``target_year``.
 
-    overall_before = df["err_before"].mean(skipna=True)
-    overall_after  = df["err_after"].mean(skipna=True)
+    Per-pair rows only — no totals footer, because the comparison frame
+    includes both sector totals and their per-fuel components and summing
+    would double-count.
+    """
+    b = _pair_values(df_comp_baseline,  target_year, "ssp_before")
+    a = _pair_values(df_comp_calibrated, target_year, "ssp_after")[
+        ["iea_balance_code", "iea_product_code", "ssp_after"]
+    ]
+    df = b.merge(a, on=["iea_balance_code", "iea_product_code"], how="outer")
+    df = df.sort_values(
+        ["iea_balance_code", "iea_product_code"]
+    ).reset_index(drop=True)
 
     country_tex = _tex_escape(country)
 
     lines = [
         r"\begin{table}[ht]",
         r"\centering",
-        f"\\caption{{Calibration error per IEA (balance, product) at "
-        f"{target_year} for {country_tex}. Error is the absolute proportional "
-        f"deviation $|y_{{\\mathrm{{SSP}}}} - y_{{\\mathrm{{IEA}}}}|/y_{{\\mathrm{{IEA}}}}$.}}",
-        f"\\label{{tab:cal_error_{_sanitize_label(country)}_{target_year}}}",
-        r"\begin{tabular}{llrr}",
+        f"\\caption{{IEA target vs SISEPUEDE aggregate (TJ) at {target_year} "
+        f"for {country_tex}, before and after calibration.}}",
+        f"\\label{{tab:cal_values_{_sanitize_label(country)}_{target_year}}}",
+        r"\begin{tabular}{llrrr}",
         r"\toprule",
-        r"IEA balance & IEA product & Error before & Error after \\",
+        r"IEA balance & IEA product & IEA target & SSP before & SSP after \\",
         r"\midrule",
     ]
 
@@ -207,15 +224,12 @@ def build_error_table(
         lines.append(
             f"{_tex_escape(row['iea_balance_code'])} & "
             f"{_tex_escape(row['iea_product_code'])} & "
-            f"{_fmt_pct(row['err_before'])} & "
-            f"{_fmt_pct(row['err_after'])} \\\\"
+            f"{_fmt_num(row['value_iea_tj'])} & "
+            f"{_fmt_num(row['ssp_before'])} & "
+            f"{_fmt_num(row['ssp_after'])} \\\\"
         )
 
     lines += [
-        r"\midrule",
-        f"\\multicolumn{{2}}{{l}}{{\\textbf{{Overall (unweighted mean)}}}} & "
-        f"\\textbf{{{_fmt_pct(overall_before)}}} & "
-        f"\\textbf{{{_fmt_pct(overall_after)}}} \\\\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\end{table}",
@@ -244,6 +258,15 @@ def build_improvement_table(
     df["ratio"] = df["err_after"] / df["err_before"]
     df["delta_pp"] = df["err_after"] - df["err_before"]
 
+    overall_before = df["err_before"].mean(skipna=True)
+    overall_after  = df["err_after"].mean(skipna=True)
+    overall_ratio  = (
+        overall_after / overall_before
+        if overall_before and np.isfinite(overall_before)
+        else float("nan")
+    )
+    overall_delta_pp = overall_after - overall_before
+
     country_tex = _tex_escape(country)
 
     lines = [
@@ -270,7 +293,17 @@ def build_improvement_table(
             f"{_fmt_signed_pp(row['delta_pp'])} \\\\"
         )
 
+    overall_ratio_cell = _wrap_cell(
+        f"\\textbf{{{_fmt_num(overall_ratio, 2)}}}",
+        _ratio_colour(overall_ratio),
+    )
     lines += [
+        r"\midrule",
+        f"\\multicolumn{{2}}{{l}}{{\\textbf{{Overall (unweighted mean)}}}} & "
+        f"\\textbf{{{_fmt_pct(overall_before)}}} & "
+        f"\\textbf{{{_fmt_pct(overall_after)}}} & "
+        f"{overall_ratio_cell} & "
+        f"\\textbf{{{_fmt_signed_pp(overall_delta_pp)}}} \\\\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\end{table}",
