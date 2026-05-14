@@ -28,6 +28,13 @@ PRIMARY_TARGETS = [
 ]
 
 
+def _maybe_save(fig, savepath: Optional[str]) -> None:
+    """Save `fig` to `savepath` (path + filename, e.g. 'plots/out.png') if
+    provided. No-op when `savepath` is None or empty."""
+    if savepath:
+        fig.savefig(savepath, bbox_inches="tight", dpi=150)
+
+
 def _resolve_pairs(
     df_comparison: pd.DataFrame,
     mode: str,
@@ -51,6 +58,66 @@ def _resolve_pairs(
     raise ValueError("mode must be 'primary' or 'fuel_mix'")
 
 
+def _plot_before_after_single_pair(
+    df_comp_baseline: pd.DataFrame,
+    df_comp_calibrated: pd.DataFrame,
+    bal: str,
+    prod: str,
+    ax_value,
+    ax_ratio = None,
+    ax_rel_err = None,
+    year_target: Optional[int] = None,
+) -> None:
+    """Render one column of the before/after time-series for a single
+    (balance, product) pair. The consumption panel (`ax_value`) is always
+    drawn; the ratio and relative-error panels are drawn only when their
+    axes are provided.
+    """
+    mask_b = (
+        (df_comp_baseline["iea_balance_code"] == bal)
+        & (df_comp_baseline["iea_product_code"] == prod)
+    )
+    mask_c = (
+        (df_comp_calibrated["iea_balance_code"] == bal)
+        & (df_comp_calibrated["iea_product_code"] == prod)
+    )
+
+    # Top panel: consumption (IEA, Before, After)
+    d_iea  = df_comp_baseline[mask_b].dropna(subset=["value_iea_tj"])
+    d_base = df_comp_baseline[mask_b].dropna(subset=["value_sisepuede_tj"])
+    d_cal  = df_comp_calibrated[mask_c].dropna(subset=["value_sisepuede_tj"])
+
+    ax_value.plot(d_iea["year"],  d_iea["value_iea_tj"]        / 1e3, "b-o",  lw=2,   ms=4, label="IEA")
+    ax_value.plot(d_base["year"], d_base["value_sisepuede_tj"] / 1e3, "r--s", lw=1.5, ms=4, label="Before")
+    ax_value.plot(d_cal["year"],  d_cal["value_sisepuede_tj"]  / 1e3, "g--^", lw=1.5, ms=4, label="After")
+    ax_value.set_title(f"{bal}x{prod}", fontsize=9)
+    ax_value.set_ylabel("PJ", fontsize=8)
+
+    # Optional diagnostic panels — same Before/After colors for visual linkage
+    diag_panels = [
+        (ax_ratio,   "ratio",   "ratio",   1.0),
+        (ax_rel_err, "rel_err", "rel_err", 0.0),
+    ]
+    for ax, col, ylabel, ref in diag_panels:
+        if ax is None:
+            continue
+        d_b = df_comp_baseline[mask_b].dropna(subset=[col])
+        d_c = df_comp_calibrated[mask_c].dropna(subset=[col])
+        ax.plot(d_b["year"], d_b[col], "r--s", lw=1.5, ms=4, label="Before")
+        ax.plot(d_c["year"], d_c[col], "g--^", lw=1.5, ms=4, label="After")
+        ax.axhline(ref, color="black", linewidth=1.0, linestyle="--")
+        ax.set_ylabel(ylabel, fontsize=8)
+
+    # x-axis decoration: vline at year_target on every panel; xlabel only on
+    # the bottom-most panel
+    all_axes = [a for a in (ax_value, ax_ratio, ax_rel_err) if a is not None]
+    for ax in all_axes:
+        if year_target is not None:
+            ax.axvline(year_target, color="grey", linestyle=":", linewidth=1)
+        ax.tick_params(axis="both", labelsize=7)
+    all_axes[-1].set_xlabel("year", fontsize=8)
+
+
 def plot_before_after_time_series(
     df_comp_baseline: pd.DataFrame,
     df_comp_calibrated: pd.DataFrame,
@@ -59,9 +126,11 @@ def plot_before_after_time_series(
     sector: Optional[str] = None,
     pairs: Optional[List[Tuple[str, str]]] = None,
     country: str = "",
+    with_diagnostics: bool = False,
+    savepath: Optional[str] = None,
 ) -> None:
     """
-    Time-series of IEA vs SISEPUEDE (before / after calibration), one subplot
+    Time-series of IEA vs SISEPUEDE (before / after calibration), one column
     per (balance, product) pair.
 
     Parameters
@@ -79,6 +148,11 @@ def plot_before_after_time_series(
         Explicit override of the pairs to plot.
     country : str
         Country label for the figure title.
+    with_diagnostics : bool
+        If True, add two bottom rows showing ratio and relative-error
+        before/after calibration. Ratio reference at 1.0; rel_err at 0.0.
+        Diagnostic lines reuse the Before (red) / After (green) colours of
+        the consumption panel.
     """
     pairs = _resolve_pairs(df_comp_baseline, mode, sector, pairs)
     if not pairs:
@@ -86,33 +160,32 @@ def plot_before_after_time_series(
         return
 
     n = len(pairs)
-    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4), sharey=False, squeeze=False)
-    axes = axes[0]
+    nrows = 3 if with_diagnostics else 1
+    fig_height = 8 if with_diagnostics else 4
+    gridspec_kw = {"height_ratios": [2, 1, 1]} if with_diagnostics else None
+    fig, axes = plt.subplots(
+        nrows, n,
+        figsize=(4 * n, fig_height),
+        sharey=False,
+        squeeze=False,
+        gridspec_kw=gridspec_kw,
+    )
 
-    for ax, (bal, prod) in zip(axes, pairs):
-        mask_b = (
-            (df_comp_baseline["iea_balance_code"] == bal)
-            & (df_comp_baseline["iea_product_code"] == prod)
+    for i, (bal, prod) in enumerate(pairs):
+        ax_value   = axes[0, i]
+        ax_ratio   = axes[1, i] if with_diagnostics else None
+        ax_rel_err = axes[2, i] if with_diagnostics else None
+        _plot_before_after_single_pair(
+            df_comp_baseline, df_comp_calibrated,
+            bal, prod,
+            ax_value, ax_ratio, ax_rel_err,
+            year_target=year_target,
         )
-        mask_c = (
-            (df_comp_calibrated["iea_balance_code"] == bal)
-            & (df_comp_calibrated["iea_product_code"] == prod)
-        )
 
-        d_iea  = df_comp_baseline[mask_b].dropna(subset=["value_iea_tj"])
-        d_base = df_comp_baseline[mask_b].dropna(subset=["value_sisepuede_tj"])
-        d_cal  = df_comp_calibrated[mask_c].dropna(subset=["value_sisepuede_tj"])
+    axes[0, 0].legend(fontsize=7)
+    if with_diagnostics:
+        axes[1, 0].legend(fontsize=7)
 
-        ax.plot(d_iea["year"],  d_iea["value_iea_tj"]        / 1e3, "b-o",  lw=2,   ms=4, label="IEA")
-        ax.plot(d_base["year"], d_base["value_sisepuede_tj"] / 1e3, "r--s", lw=1.5, ms=4, label="Before")
-        ax.plot(d_cal["year"],  d_cal["value_sisepuede_tj"]  / 1e3, "g--^", lw=1.5, ms=4, label="After")
-        ax.axvline(year_target, color="grey", linestyle=":", linewidth=1)
-        ax.set_title(f"{bal}x{prod}", fontsize=9)
-        ax.set_xlabel("year", fontsize=8)
-        ax.set_ylabel("PJ", fontsize=8)
-        ax.tick_params(axis="both", labelsize=7)
-
-    axes[0].legend(fontsize=7)
     scope = f"{sector} fuel mix" if mode == "fuel_mix" else "primary sector totals"
     fig.suptitle(
         f"{country} — {scope}: IEA vs SISEPUEDE before/after calibration\n"
@@ -120,6 +193,7 @@ def plot_before_after_time_series(
         fontsize=10,
     )
     fig.tight_layout()
+    _maybe_save(fig, savepath)
     plt.show()
 
 
@@ -131,6 +205,7 @@ def plot_before_after_bar(
     sector: Optional[str] = None,
     pairs: Optional[List[Tuple[str, str]]] = None,
     country: str = "",
+    savepath: Optional[str] = None,
 ) -> None:
     """
     Grouped bar chart of IEA vs SISEPUEDE (before / after calibration) at
@@ -204,6 +279,7 @@ def plot_before_after_bar(
     ax.set_title(title)
     ax.legend()
     fig.tight_layout()
+    _maybe_save(fig, savepath)
     plt.show()
 
 
@@ -213,6 +289,7 @@ def plot_before_after_discrepancy_bar(
     year_target: int,
     variable: str = "ratio",
     country: str = "",
+    savepath: Optional[str] = None,
 ) -> None:
     """
     Side-by-side bar chart comparing the SISEPUEDE-vs-IEA discrepancy at
@@ -282,6 +359,7 @@ def plot_before_after_discrepancy_bar(
     )
     ax.legend()
     fig.tight_layout()
+    _maybe_save(fig, savepath)
     plt.show()
 
 
@@ -290,6 +368,7 @@ def plot_baseline_discrepancy_bar(
     year_target: int,
     variable: str = "ratio",
     country: str = "",
+    savepath: Optional[str] = None,
 ) -> None:
     """
     Bar chart of per-(balance, product) discrepancy between SISEPUEDE and IEA
@@ -357,6 +436,7 @@ def plot_baseline_discrepancy_bar(
     ax.set_title(title)
     ax.legend(fontsize=8)
     fig.tight_layout()
+    _maybe_save(fig, savepath)
     plt.show()
 
 
@@ -391,23 +471,52 @@ def _plot_detailed_single(
     ax3.grid(True, alpha=0.3)
 
 
-def plot_detailed_comparisons(
+def plot_observation_comparisons(
     df_comparison: pd.DataFrame,
     pairs: Union[Tuple[str, str], List[Tuple[str, str]]] = None,
+    country: str = '',
+    max_pairs: int = 12,
+    with_diagnostics: bool = False,
     second_var: str = 'ratio',
     third_var: str = 'rel_err',
     second_label: str = 'Ratio SSP/IEA',
     third_label: str = 'Rel Error IEA',
-    country: str = '',
-    max_pairs: int = 12,
+    savepath: Optional[str] = None,
 ) -> None:
     """
-    Plot detailed comparison for one or more (iea_balance, iea_product) pairs using Seaborn.
+    Plot SISEPUEDE vs IEA time series for one or more (balance, product) pairs.
 
-    - If `pairs` is a tuple, it is treated as a single entity.
-    - If `pairs` is a list, each pair draws one 3-subplot figure.
-    - If `pairs` is None, the function will infer pair(s) from `df_comparison`.
+    Layout
+    ------
+    - `with_diagnostics=False` (default): one consumption panel per pair.
+        * Single pair    -> one tall axis (8 × 6).
+        * Multiple pairs -> wrapping grid (≤ 3 columns).
+    - `with_diagnostics=True`: three stacked panels per pair (consumption,
+      `second_var`, `third_var`). Diagnostic curves use green / purple
+      colours; they are not before/after comparisons.
+        * Single pair    -> 3 rows × 1 col with height ratios (2, 1, 1).
+        * Multiple pairs -> 3 rows × N cols.
+
+    Pair identifiers can be IEA code (e.g., 'INDUSTRY') or name
+    (e.g., 'Industry'). Pairs with no matching rows are skipped.
+
+    Parameters
+    ----------
+    df_comparison : pd.DataFrame
+    pairs : tuple, list of tuples, or None
+        - tuple of length 2: a single pair.
+        - list of tuples: multiple pairs.
+        - None: inferred from `df_comparison` (only valid when the frame
+          contains exactly one pair).
+    country : str
+    max_pairs : int
+    with_diagnostics : bool
+    second_var, third_var : str
+        Column names plotted in the two diagnostic rows.
+    second_label, third_label : str
+        Y-axis labels for the diagnostic rows.
     """
+    # ── Normalise `pairs` ────────────────────────────────────────────────
     if pairs is None:
         unique_pairs = df_comparison[['iea_balance_code', 'iea_product_code']].drop_duplicates()
         if len(unique_pairs) != 1:
@@ -420,7 +529,8 @@ def plot_detailed_comparisons(
     if not isinstance(pairs, list):
         raise ValueError('pairs must be a tuple or a list of tuples')
 
-    selected_pairs = []
+    # ── Resolve metadata per pair ────────────────────────────────────────
+    selected = []
     for balance_id, product_id in pairs[:max_pairs]:
         mask_balance = (df_comparison['iea_balance_code'] == balance_id) | (df_comparison['iea_balance_name'] == balance_id)
         mask_product = (df_comparison['iea_product_code'] == product_id) | (df_comparison['iea_product_name'] == product_id)
@@ -430,168 +540,90 @@ def plot_detailed_comparisons(
             print(f'No data found for pair: {balance_id}, {product_id}')
             continue
 
-        balance_code = df_pair['iea_balance_code'].iloc[0]
-        balance_name = df_pair['iea_balance_name'].iloc[0]
-        product_code = df_pair['iea_product_code'].iloc[0]
-        product_name = df_pair['iea_product_name'].iloc[0]
-        subsector = df_pair['sisepuede_subsector'].iloc[0] if 'sisepuede_subsector' in df_pair.columns else 'Unknown'
-
-        selected_pairs.append({
-            'data': df_pair,
-            'balance_code': balance_code,
-            'balance_name': balance_name,
-            'product_code': product_code,
-            'product_name': product_name,
-            'subsector': subsector,
+        selected.append({
+            'data':         df_pair,
+            'balance_code': df_pair['iea_balance_code'].iloc[0],
+            'product_code': df_pair['iea_product_code'].iloc[0],
+            'subsector':    df_pair['sisepuede_subsector'].iloc[0] if 'sisepuede_subsector' in df_pair.columns else 'Unknown',
         })
 
-    if not selected_pairs:
+    if not selected:
         print("No valid pairs to plot.")
         return
 
-    if len(selected_pairs) == 1:
-        # Single pair: 3 subplots in one figure
-        pair = selected_pairs[0]
-        fig, (ax1, ax2, ax3) = plt.subplots(
-            3, 1, sharex=True, figsize=(8, 10), gridspec_kw={'height_ratios': [2, 1, 1]}
-        )
-        _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
-        # title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
-        title = f"{pair['balance_code']} x {pair['product_code']} - {pair['subsector']}"
-        ax1.set_title(title, fontsize=10)
-        fig.suptitle(f"Detailed Comparison — {country}", fontsize=12, y=0.98)
-        plt.tight_layout()
-        plt.show()
+    n = len(selected)
+
+    def _title(pair, fontsize):
+        return f"{pair['balance_code']} x {pair['product_code']} - {pair['subsector']}", fontsize
+
+    # ── Render ───────────────────────────────────────────────────────────
+    if with_diagnostics:
+        if n == 1:
+            fig, axes = plt.subplots(
+                3, 1, sharex=True, figsize=(8, 10),
+                gridspec_kw={'height_ratios': [2, 1, 1]},
+            )
+            ax_cols = [axes]
+        else:
+            fig, axes = plt.subplots(
+                3, n, figsize=(4 * n, 8), sharex='col', squeeze=False,
+                gridspec_kw={'height_ratios': [2, 1, 1]},
+            )
+            ax_cols = [axes[:, i] for i in range(n)]
+
+        for col_axes, pair in zip(ax_cols, selected):
+            ax1, ax2, ax3 = col_axes[0], col_axes[1], col_axes[2]
+            _plot_detailed_single(
+                pair['data'], ax1, ax2, ax3,
+                second_var, third_var, second_label, third_label,
+            )
+            title, fs = _title(pair, 10 if n == 1 else 9)
+            ax1.set_title(title, fontsize=fs)
+
+        suptitle = f"Detailed Comparison{'s' if n > 1 else ''} — {country}"
+        y_supt = 0.98
+
     else:
-        # Multiple pairs: 3 rows (stacked plots per pair), columns for pairs
-        nrows = 3
-        ncols = len(selected_pairs)
-        fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 8), sharex='col', squeeze=False)
+        if n == 1:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            axes_flat = [ax]
+        else:
+            ncols = min(3, n)
+            nrows = int(np.ceil(n / ncols))
+            fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows), squeeze=False)
+            axes_flat = list(axes.flatten())
 
-        for i, pair in enumerate(selected_pairs):
-            ax1, ax2, ax3 = axes[0, i], axes[1, i], axes[2, i]
-            _plot_detailed_single(pair['data'], ax1, ax2, ax3, second_var, third_var, second_label, third_label)
-            # Title on the top axis for each pair
-            # title = f"{pair['balance_code']} ({pair['balance_name']}) x {pair['product_code']} ({pair['product_name']}) - {pair['subsector']}"
-            title = f"{pair['balance_code']} x {pair['product_code']} - {pair['subsector']}"
-            ax1.set_title(title, fontsize=9)
-
-        fig.suptitle(f"Detailed Comparisons — {country}", fontsize=12, y=0.98)
-        plt.tight_layout()
-        plt.show()
-
-
-def plot_selected_comparisons(
-    df_comparison: pd.DataFrame,
-    pairs: list,
-    country: str = "",
-    max_panels: int = 12,
-) -> None:
-    """
-    Plot SISEPUEDE vs IEA time series for selected pairs of balance and product identifiers using Seaborn.
-
-    Each pair is a tuple (balance_identifier, product_identifier), where identifier can be
-    either the code (e.g., 'INDUSTRY') or the name (e.g., 'Industry').
-
-    Infers sisepuede_subsector from the data and displays it in the plot title.
-    """
-    df = df_comparison.copy()
-
-    # Filter to pairs where we have at least one IEA observation
-    df = df[df["value_iea_tj"].notna()]
-
-    selected_pairs = []
-    for balance_id, product_id in pairs[:max_panels]:
-        # Find matching rows
-        mask_balance = (df["iea_balance_code"] == balance_id) | (df["iea_balance_name"] == balance_id)
-        mask_product = (df["iea_product_code"] == product_id) | (df["iea_product_name"] == product_id)
-        mask = mask_balance & mask_product
-
-        sub = df[mask]
-        if sub.empty:
-            print(f"No data found for pair: {balance_id}, {product_id}")
-            continue
-
-        # Get unique values
-        balance_code = sub["iea_balance_code"].unique()[0]
-        balance_name = sub["iea_balance_name"].unique()[0]
-        product_code = sub["iea_product_code"].unique()[0]
-        product_name = sub["iea_product_name"].unique()[0]
-        subsector = sub["sisepuede_subsector"].unique()[0] if "sisepuede_subsector" in sub.columns else "Unknown"
-
-        selected_pairs.append({
-            "balance_code": balance_code,
-            "balance_name": balance_name,
-            "product_code": product_code,
-            "product_name": product_name,
-            "subsector": subsector,
-            "data": sub.sort_values("year")
-        })
-
-    if not selected_pairs:
-        print("No valid pairs to plot.")
-        return
-
-    if len(selected_pairs) == 1:
-        # Single plot
-        pair = selected_pairs[0]
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Melt for seaborn
-        df_melt = pair["data"].melt(id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
-                                    var_name='source', value_name='value')
-        df_melt['source'] = df_melt['source'].map({'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'})
-
-        sns.lineplot(data=df_melt, x='year', y='value', hue='source', style='source',
-                     markers=['o', 's'], ax=ax, palette=['steelblue', 'tomato'])
-
-        # title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
-        #          f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
-        title = (f"{pair['balance_code']} x "
-                 f"{pair['product_code']} - {pair['subsector']}")
-        ax.set_title(title, fontsize=10)
-        ax.set_xlabel("Year")
-        ax.set_ylabel("TJ")
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-
-        plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
-        plt.tight_layout()
-        plt.show()
-    else:
-        # Multiple panels
-        ncols = min(3, len(selected_pairs))
-        nrows = int(np.ceil(len(selected_pairs) / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows), squeeze=False)
-        axes_flat = axes.flatten()
-
-        for i, pair in enumerate(selected_pairs):
+        for i, pair in enumerate(selected):
             ax = axes_flat[i]
-
-            # Melt for seaborn
-            df_melt = pair["data"].melt(id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
-                                        var_name='source', value_name='value')
-            df_melt['source'] = df_melt['source'].map({'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'})
-
-            sns.lineplot(data=df_melt, x='year', y='value', hue='source', style='source',
-                         markers=['o', 's'], ax=ax, palette=['steelblue', 'tomato'])
-
-            # title = (f"{pair['balance_code']} ({pair['balance_name']}) x "
-            #          f"{pair['product_code']} ({pair['product_name']}) - {pair['subsector']}")
-            title = (f"{pair['balance_code']} x "
-                     f"{pair['product_code']} - {pair['subsector']}")
-            ax.set_title(title, fontsize=9)
+            df_melt = pair['data'].melt(
+                id_vars=['year'], value_vars=['value_iea_tj', 'value_sisepuede_tj'],
+                var_name='source', value_name='value',
+            )
+            df_melt['source'] = df_melt['source'].map(
+                {'value_iea_tj': 'IEA (observed)', 'value_sisepuede_tj': 'SISEPUEDE'}
+            )
+            sns.lineplot(
+                data=df_melt, x='year', y='value', hue='source', style='source',
+                markers=['o', 's'], ax=ax, palette=['steelblue', 'tomato'],
+            )
+            title, fs = _title(pair, 10 if n == 1 else 9)
+            ax.set_title(title, fontsize=fs)
             ax.set_xlabel("Year")
             ax.set_ylabel("TJ")
-            ax.legend(fontsize=7)
+            ax.legend(fontsize=8 if n == 1 else 7)
             ax.grid(True, alpha=0.3)
 
-        for j in range(i + 1, len(axes_flat)):
+        # Hide unused axes when wrapping
+        for j in range(n, len(axes_flat)):
             axes_flat[j].set_visible(False)
 
-        plt.suptitle(f"IEA vs SISEPUEDE — {country}", fontsize=12, y=1.01)
-        plt.tight_layout()
-        plt.show()
+        suptitle = f"IEA vs SISEPUEDE — {country}"
+        y_supt = 1.01
+
+    fig.suptitle(suptitle, fontsize=12, y=y_supt)
+    plt.tight_layout()
+    _maybe_save(fig, savepath)
+    plt.show()
 
 
 def plot_metric_bar(
@@ -599,6 +631,7 @@ def plot_metric_bar(
     year: int,
     metric: str = 'difference',
     orientation: str = 'vertical',
+    savepath: Optional[str] = None,
 ) -> None:
     """
     Create a bar plot showing a metric derived from the difference between SSP and IEA values
@@ -672,4 +705,5 @@ def plot_metric_bar(
                         ha='left', va='center', fontsize=10)
 
     plt.tight_layout()
+    _maybe_save(fig, savepath)
     plt.show()
