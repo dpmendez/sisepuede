@@ -47,13 +47,22 @@
 \newcommand{\targetYear}{2018}                                                 % calibration target year
 \newcommand{\plotsDir}{/Users/dianamendez/sisepuede-data/plots}                % path to plots/
 \newcommand{\tablesDir}{/Users/dianamendez/sisepuede-data/tables}              % path to tables/
+\newcommand{\runTag}{}                                                         % optional run tag (e.g. gamma100); leave empty for none
 
 % ── Path helpers (do not edit) ──────────────────────────────────────────────
+%   When \runTag is non-empty, filenames get an extra "_<runTag>" suffix
+%   and the per-pair knob tables live in "knobs_<runTag>/", matching what
+%   energy_calibration() writes when called with a tag.
 \graphicspath{{\plotsDir/}}
 
-\newcommand{\plotFile}[1]{\plotsDir/\countryISO_#1}
-\newcommand{\tableFile}[1]{\tablesDir/\countryISO_#1}
-\newcommand{\knobFile}[2]{\tablesDir/knobs/knobs_#1_#2}
+% Internal: tag suffix (expands to "" if \runTag is empty, "_<tag>" otherwise)
+\makeatletter
+\newcommand{\tagSuffix}{\ifx\runTag\@empty\else_\runTag\fi}
+\makeatother
+
+\newcommand{\plotFile}[1]{\plotsDir/\countryISO_#1\tagSuffix.png}
+\newcommand{\tableFile}[1]{\tablesDir/\countryISO_#1\tagSuffix.tex}
+\newcommand{\knobFile}[2]{\tablesDir/knobs\tagSuffix/knobs_#1_#2}
 
 % ── Title ───────────────────────────────────────────────────────────────────
 \title{SISEPUEDE Energy Calibration Report \\ \large \countryName\ (\countryISO) --- target year \targetYear}
@@ -90,11 +99,11 @@ a relative error ((SSP$-$IEA)/IEA, reference~$=0$).
 \begin{figure}[H]
     \centering
     \begin{subfigure}{0.49\textwidth}
-        \includegraphics[width=\linewidth]{\plotFile{baseline_discrepancy_ratio.png}}
+        \includegraphics[width=\linewidth]{\plotFile{baseline_discrepancy_ratio}}
         \caption{Ratio SSP/IEA.}
     \end{subfigure}\hfill
     \begin{subfigure}{0.49\textwidth}
-        \includegraphics[width=\linewidth]{\plotFile{baseline_discrepancy_rel_error.png}}
+        \includegraphics[width=\linewidth]{\plotFile{baseline_discrepancy_rel_error}}
         \caption{Relative error.}
     \end{subfigure}
     \caption{Baseline discrepancy at \targetYear\ for \countryName.}
@@ -110,7 +119,7 @@ The following table reports the IEA target and the SISEPUEDE aggregate
 year, before and after calibration. Rows include both sector totals
 and their per-fuel components.
 
-\input{\tableFile{values_table.tex}}
+\input{\tableFile{values_table}}
 
 
 % ============================================================================
@@ -122,7 +131,7 @@ calibration. The ratio column is colour-graded
 (green: improvement, red: regression); the $\Delta$~(pp) column shows
 the signed change in percentage points.
 
-\input{\tableFile{improvement_table.tex}}
+\input{\tableFile{improvement_table}}
 
 
 % ============================================================================
@@ -132,11 +141,11 @@ the signed change in percentage points.
 \begin{figure}[H]
     \centering
     \begin{subfigure}{0.49\textwidth}
-        \includegraphics[width=\linewidth]{\plotFile{before_after_discrepancy_ratio.png}}
+        \includegraphics[width=\linewidth]{\plotFile{before_after_discrepancy_ratio}}
         \caption{Ratio SSP/IEA.}
     \end{subfigure}\hfill
     \begin{subfigure}{0.49\textwidth}
-        \includegraphics[width=\linewidth]{\plotFile{before_after_discrepancy_rel_error.png}}
+        \includegraphics[width=\linewidth]{\plotFile{before_after_discrepancy_rel_error}}
         \caption{Relative error.}
     \end{subfigure}
     \caption{Discrepancy at \targetYear\ before vs.\ after calibration.
@@ -156,14 +165,14 @@ calibration.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\linewidth]{\plotFile{primary_timeseries.png}}
+    \includegraphics[width=\linewidth]{\plotFile{primary_timeseries}}
     \caption{Primary sector totals --- IEA vs.\ SISEPUEDE before/after
     calibration, time series.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.85\linewidth]{\plotFile{primary_bar.png}}
+    \includegraphics[width=0.85\linewidth]{\plotFile{primary_bar}}
     \caption{Primary sector totals at \targetYear\ --- grouped bars.}
 \end{figure}
 
@@ -185,37 +194,57 @@ for this country.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\linewidth]{\plotFile{fuelmix_INDUSTRY_timeseries.png}}
+    \includegraphics[width=\linewidth]{\plotFile{fuelmix_INDUSTRY_timeseries}}
     \caption{INDUSTRY fuel mix --- time series with ratio and relative-error
     diagnostic panels.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_INDUSTRY_bar.png}}
+    \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_INDUSTRY_bar}}
     \caption{INDUSTRY fuel shares at \targetYear.}
 \end{figure}
 
-% \subsection{TRANSPORT}
-% \begin{figure}[H]
-%   \centering
-%   \includegraphics[width=\linewidth]{\plotFile{fuelmix_TRANSPORT_timeseries.png}}
-%   \caption{TRANSPORT fuel mix --- time series.}
-% \end{figure}
-% \begin{figure}[H]
-%   \centering
-%   \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_TRANSPORT_bar.png}}
-%   \caption{TRANSPORT fuel shares at \targetYear.}
-% \end{figure}
+\newpage
+\subsection{TRANSPORT}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{\plotFile{fuelmix_TRANSPORT_timeseries}}
+  \caption{TRANSPORT fuel mix --- time series.}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_TRANSPORT_bar}}
+  \caption{TRANSPORT fuel shares at \targetYear.}
+\end{figure}
 
-% \subsection{RESIDENT}
-% ... (same pattern)
 
-% \subsection{COMMPUB}
-% ... (same pattern)
+\newpage
+\subsection{RESIDENT}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{\plotFile{fuelmix_RESIDENT_timeseries}}
+  \caption{RESIDENT fuel mix --- time series.}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_RESIDENT_bar}}
+  \caption{RESIDENT fuel shares at \targetYear.}
+\end{figure}
 
-% \subsection{AGRICULT}
-% ... (same pattern)
+
+\newpage
+\subsection{COMMPUB}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{\plotFile{fuelmix_COMMPUB_timeseries}}
+  \caption{COMMPUB fuel mix --- time series.}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\linewidth]{\plotFile{fuelmix_COMMPUB_bar}}
+  \caption{COMMPUB fuel shares at \targetYear.}
+\end{figure}
 
 
 % ============================================================================
@@ -231,7 +260,7 @@ phase-1 scalar knobs appear under an ``Unconstrained'' sub-header. The
 $|\Delta| \geq 25 / 50 / 75\,\%$.
 
 Each pair has its own file at
-\texttt{\tablesDir/knobs/knobs\_<balance>\_<product>.tex}; the
+\texttt{\tablesDir/knobs\tagSuffix/knobs\_<balance>\_<product>.tex}; the
 \textbackslash knobIfExists macro below pulls in only those that the
 pipeline actually wrote, so unused pairs are silently skipped.
 
