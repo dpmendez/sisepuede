@@ -38,6 +38,10 @@ import sisepuede.utilities._toolbox as sf
 #    SET SOME GLOBAL VARIABLES    #
 ###################################
 
+# SOME DEFAULT TRANSFORMER VALUES
+_DEFAULT_VALUE_TRANSFORMER_DECREASE_MCF = 0.5
+
+
 # SOME DEFAULT VALUES
 _DEFAULT_VALUE_VIR_ALPHA_LOGISTIC = 0.0
 _DEFAULT_VALUE_VIR_RENEWABLE_CAP_DELTA_FRAC = 0.0075
@@ -1330,6 +1334,14 @@ class Transformers:
         )
         all_transformers.append(self.waso_descrease_consumer_food_waste)
 
+
+        self.waso_descrease_mcf_landfills = Transformer(
+            f"{_MODULE_CODE_SIGNATURE}:WASO:DEC_MCF_LANDFILLS",
+            self._trfunc_waso_decrease_mcf_landfills, 
+            attr_transformer_code
+        )
+        all_transformers.append(self.waso_descrease_mcf_landfills)
+        
         
         self.waso_increase_anaerobic_treatment_and_composting = Transformer(
             f"{_MODULE_CODE_SIGNATURE}:WASO:INC_ANAEROBIC_AND_COMPOST", 
@@ -5207,6 +5219,66 @@ class Transformers:
             field_region = self.key_region,
             model_circecon = self.model_circular_economy,
             strategy_id = strat
+        )
+
+        return df_out
+    
+
+
+    def _trfunc_waso_decrease_mcf_landfills(self,
+        df_input: Union[pd.DataFrame, None] = None,
+        magnitude: float = _DEFAULT_VALUE_TRANSFORMER_DECREASE_MCF,
+        strat: Union[int, None] = None,
+        vec_implementation_ramp: Union[np.ndarray, None] = None,
+    ) -> pd.DataFrame:
+        """Implement the "Decrease Methane Correction Factor in Landfills" WASO transformer on input DataFrame df_input. Can be used to represent a shift to semi-aerobic lanfills.
+        
+        Parameters
+        ----------
+        df_input : pd.DataFrame
+            Optional data frame containing trajectories to modify
+        dict_magnitude : 
+            % Reduction in MCF at landfills. E.g., 0.5 will _reduce_ the methane correction factor by 50%.
+        strat : int
+            Optional strategy value to specify for the transformation
+        vec_implementation_ramp : Union[np.ndarray, Dict[str, int], None]
+            Optional vector or dictionary specifying the implementation scalar ramp for the transformation. If None, defaults to a uniform ramp that starts at the time specified in the configuration.
+        """
+        # check input dataframe
+        df_input = (
+            self.baseline_inputs
+            if not isinstance(df_input, pd.DataFrame) 
+            else df_input
+        )
+
+        # check implementation ramp
+        vec_implementation_ramp = self.check_implementation_ramp(
+            vec_implementation_ramp,
+            df_input,
+        )
+
+        if not sf.isnumber(magnitude):
+            magnitude = 0.5
+        
+        magnitude = (
+            max(min(magnitude, 1.0), 0.0)
+            if magnitude >= 0
+            else 1 - magnitude
+        )
+
+        df_out = tbg.transformation_general(
+            df_input,
+            self.model_attributes,
+            {
+                self.model_circular_economy.modvar_waso_mcf_landfills_average: {
+                    "bounds": (0, np.inf),
+                    "magnitude": magnitude,
+                    "magnitude_type": "baseline_scalar",
+                    "vec_ramp": vec_implementation_ramp
+                }
+            },
+            field_region = self.key_region,
+            strategy_id = strat,
         )
 
         return df_out
