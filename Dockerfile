@@ -53,7 +53,7 @@ SHELL ["/bin/bash", "-c"]
 RUN source /venv/bin/activate \
     && pip install juliacall==0.9.25 \
     && pip install juliapkg==0.1.17 \
-    && pip install git+https://github.com/jcsyme/sisepuede.git@4ea55d143ed19633aeb3bbfcd98c0944203ec9e0
+    && pip install git+https://github.com/jcsyme/sisepuede.git@0467d65465f140ac0270c18fec387944cb534287
     
 # import after installation to ensure julia is installed
 RUN source /venv/bin/activate \
