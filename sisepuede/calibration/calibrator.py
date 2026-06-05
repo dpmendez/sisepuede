@@ -651,6 +651,93 @@ class Calibrator:
             )
 
     # ------------------------------------------------------------------
+    #   Pre-condition: input simplex sums equal 1
+    # ------------------------------------------------------------------
+
+    def _verify_input_simplex_sums(
+        self,
+        df_in: pd.DataFrame,
+        full_log: List[dict],
+    ) -> None:
+        """Sanity-check that the raw input dataframe already satisfies sum-to-1.
+
+        Runs BEFORE any calibration phase touches `df_in`. Catches the case
+        where the underlying SISEPUEDE input CSV violates a simplex group
+        defined in `ModelAttributes` — e.g. the SCOE category split where
+        each category's heat fractions sum to 0.5 instead of 1. Without this
+        pre-check the violation only surfaces as an obscure QP infeasibility
+        when `enforce_varspec_bounds=True`, and is silently masked by
+        renormalisation otherwise.
+
+        Same severity bands as `_verify_simplex_sums`; the messages are
+        worded for an *input-data* failure (fix the CSV) rather than a
+        calibration corruption (fix the code).
+        """
+        findings = self.simplex_registry.check_sums(df_in)
+
+        severe = [r for r in findings if r["severity"] == "severe"]
+        strong = [r for r in findings if r["severity"] == "strong_warn"]
+        warn   = [r for r in findings if r["severity"] == "warn"]
+
+        for r in severe + strong + warn:
+            full_log.append({
+                "phase":             0,
+                "status":            f"input_simplex_check_{r['severity']}",
+                "group_id":          r["group_id"],
+                "n_columns":         r["n_columns"],
+                "max_abs_dev":       round(r["max_abs_dev"], 8),
+                "time_period_worst": r["time_period_worst"],
+            })
+        full_log.append({
+            "phase":            0,
+            "status":           "input_simplex_check_summary",
+            "n_groups_checked": len(findings),
+            "n_warn":           len(warn),
+            "n_strong_warn":    len(strong),
+            "n_severe":         len(severe),
+        })
+
+        for r in warn:
+            warnings.warn(
+                f"Input data: simplex group {r['group_id']} sum-to-1 drift "
+                f"max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']}. Small but worth noting."
+            )
+        for r in strong:
+            warnings.warn(
+                f"Input data: simplex group {r['group_id']} sum-to-1 NOTABLE "
+                f"drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']} (n_cols={r['n_columns']}). "
+                "The input CSV may have an inconsistency in this simplex."
+            )
+
+        if severe:
+            offenders = [
+                {
+                    "group_id":   r["group_id"],
+                    "n_columns":  r["n_columns"],
+                    "max_abs_dev": round(r["max_abs_dev"], 6),
+                    "columns":    self.simplex_registry.columns_in_group(r["group_id"]),
+                }
+                for r in severe
+            ]
+            details = "\n".join(
+                f"  - group_id={o['group_id']}  |sum-1|={o['max_abs_dev']}  "
+                f"n_cols={o['n_columns']}\n      columns={o['columns']}"
+                for o in offenders
+            )
+            raise RuntimeError(
+                f"Input data violates the simplex sum-to-1 constraint for "
+                f"{len(severe)} group(s). Calibration cannot proceed: the QP "
+                "would either declare infeasibility (with bounds) or silently "
+                "renormalise the violation away (without bounds), neither of "
+                "which is safe. The underlying SISEPUEDE input file needs to "
+                f"be fixed for these groups:\n{details}\n\n"
+                "Inspect the log entries with status='input_simplex_check_*' "
+                "for the full list."
+            )
+
+    # ------------------------------------------------------------------
     #   Phase 2 (v2) — fuel mix via Quadratic Program
     # ------------------------------------------------------------------
 
@@ -717,6 +804,9 @@ class Calibrator:
             enforce_varspec_bounds = enforce_varspec_bounds,
             lb_per_col             = qp["lb_per_col"],
             ub_per_col             = qp["ub_per_col"],
+            columns                = qp["columns"],
+            sector_group_ids       = qp["sector_group_ids"],
+            missing_per_group      = qp["missing_per_group"],
         )
 
         # 4. Diagnostics: predicted residual at the solution ──────────────
@@ -821,6 +911,13 @@ class Calibrator:
         time_period = self._get_time_period(df_in)
         df          = df_in.copy()
         full_log:   List[dict] = []
+
+        # Pre-condition: the raw input must already satisfy every simplex's
+        # sum-to-1. If it doesn't, Phase 2's QP would either declare
+        # infeasibility (with bounds on) or silently mask the violation by
+        # renormalisation (with bounds off). Fail fast with a clear, input-
+        # data-focused error instead.
+        self._verify_input_simplex_sums(df_in, full_log)
 
         for it in range(n_iter):
             print(f"\n=== Calibration iteration {it + 1}/{n_iter} ===")

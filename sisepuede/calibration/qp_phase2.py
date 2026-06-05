@@ -330,30 +330,121 @@ def build_qp_inputs(
     # 6. sector_indices: one column-index array per simplex group id ───────
     # All columns in `columns` belong to some simplex group via the registry.
     # The QP enforces sum=1 over every group whose columns appear here.
+    # We also record (a) the gid order parallel to sector_indices and (b) the
+    # columns each simplex registers but that did not make it into `columns`
+    # (dropped by the eligibility filter). These power the bound-feasibility
+    # diagnostic in solve_phase2_qp.
     gid_to_idx: Dict[int, List[int]] = {}
     for c, j in col_idx.items():
         gid = simplex_registry.group_id(c)
         if gid is None:
             continue
         gid_to_idx.setdefault(gid, []).append(j)
-    sector_indices = [np.array(sorted(v)) for v in gid_to_idx.values()]
+    sector_group_ids = list(gid_to_idx.keys())
+    sector_indices = [np.array(sorted(gid_to_idx[gid])) for gid in sector_group_ids]
+    columns_set = set(columns)
+    missing_per_group: Dict[int, List[str]] = {
+        gid: [c for c in simplex_registry.columns_in_group(gid) if c not in columns_set]
+        for gid in sector_group_ids
+    }
 
     return {
-        "columns":        columns,
-        "A":              A,
-        "b":              b,
-        "f_default":      f_default,
-        "lb_per_col":     lb_per_col,
-        "ub_per_col":     ub_per_col,
-        "sector_indices": sector_indices,
-        "target_keys":    target_keys,
-        "skipped":        skipped,
+        "columns":           columns,
+        "A":                 A,
+        "b":                 b,
+        "f_default":         f_default,
+        "lb_per_col":        lb_per_col,
+        "ub_per_col":        ub_per_col,
+        "sector_indices":    sector_indices,
+        "sector_group_ids":  sector_group_ids,
+        "missing_per_group": missing_per_group,
+        "target_keys":       target_keys,
+        "skipped":           skipped,
     }
 
 
 ##########################
 #    SOLVER              #
 ##########################
+
+def _diagnose_bound_infeasibility(
+    f_default: np.ndarray,
+    lb_per_col: np.ndarray,
+    ub_per_col: np.ndarray,
+    sector_indices: List[np.ndarray],
+    columns: Optional[List[str]] = None,
+    sector_group_ids: Optional[List[int]] = None,
+    missing_per_group: Optional[Dict[int, List[str]]] = None,
+    tol: float = 1e-9,
+) -> List[str]:
+    """Return a list of human-readable reasons the bounded QP is infeasible.
+
+    Two failure modes are checked:
+
+    1. Per-column: any j with lb[j] > 1 or ub[j] < 1 puts f_default[j]
+       outside its own bound box, which is almost always a config error.
+    2. Per simplex group g: the QP enforces sum(f[idx_g]) == 1, and each
+       f[j] is bound to [lb_j * f_d_j, ub_j * f_d_j]. The reachable range
+       of the sum is [sum(lb_j * f_d_j), sum(ub_j * f_d_j)] (Minkowski
+       sum of independent intervals), so 1 must lie in that range.
+
+    An empty list means the bounds are compatible with the constraints
+    (the solver may still report infeasibility for numerical reasons, but
+    not because of these structural issues).
+    """
+    reasons: List[str] = []
+
+    bad_lb = np.where(lb_per_col > 1.0 + tol)[0]
+    bad_ub = np.where(ub_per_col < 1.0 - tol)[0]
+    for j in bad_lb:
+        name = columns[j] if columns else f"col[{j}]"
+        reasons.append(
+            f"column '{name}': lb={lb_per_col[j]:.4f} > 1, f_default itself "
+            f"is below its lower bound"
+        )
+    for j in bad_ub:
+        name = columns[j] if columns else f"col[{j}]"
+        reasons.append(
+            f"column '{name}': ub={ub_per_col[j]:.4f} < 1, f_default itself "
+            f"is above its upper bound"
+        )
+
+    for g, idx in enumerate(sector_indices):
+        if len(idx) == 0:
+            continue
+        sum_lb = float(np.sum(lb_per_col[idx] * f_default[idx]))
+        sum_ub = float(np.sum(ub_per_col[idx] * f_default[idx]))
+        sum_def = float(np.sum(f_default[idx]))
+        if 1.0 < sum_lb - tol or 1.0 > sum_ub + tol:
+            col_names = (
+                [columns[j] for j in idx] if columns else [f"col[{j}]" for j in idx]
+            )
+            gid = sector_group_ids[g] if sector_group_ids else g
+            gid_label = (
+                f"simplex group gid={gid}"
+                if sector_group_ids else f"simplex group #{g}"
+            )
+            missing = (
+                missing_per_group.get(gid, []) if missing_per_group else []
+            )
+            missing_line = (
+                f"\n    Missing from QP (in registry simplex but no IEA target): "
+                f"{missing}"
+                if missing else
+                "\n    Missing from QP: none — the full simplex is in the QP, "
+                "so the gap is in the input data itself (run check_sums to "
+                "confirm)."
+            )
+            reasons.append(
+                f"{gid_label}: reachable sum in [{sum_lb:.4f}, {sum_ub:.4f}] "
+                f"but constraint requires 1.0 "
+                f"(sum(f_default[idx])={sum_def:.4f}, n_cols={len(idx)})."
+                f"\n    In QP: {col_names}"
+                f"{missing_line}"
+            )
+
+    return reasons
+
 
 def solve_phase2_qp(
     A: np.ndarray,
@@ -364,6 +455,9 @@ def solve_phase2_qp(
     enforce_varspec_bounds: bool = False,
     lb_per_col: Optional[np.ndarray] = None,
     ub_per_col: Optional[np.ndarray] = None,
+    columns: Optional[List[str]] = None,
+    sector_group_ids: Optional[List[int]] = None,
+    missing_per_group: Optional[Dict[int, List[str]]] = None,
 ) -> np.ndarray:
     """Solve the Phase-2 QP.
 
@@ -433,15 +527,36 @@ def solve_phase2_qp(
         constraints.append(f >= lb_per_col * f_default)
         constraints.append(f <= ub_per_col * f_default)
 
+        reasons = _diagnose_bound_infeasibility(
+            f_default, lb_per_col, ub_per_col, sector_indices,
+            columns=columns,
+            sector_group_ids=sector_group_ids,
+            missing_per_group=missing_per_group,
+        )
+        if reasons:
+            bullets = "\n  - ".join(reasons)
+            raise RuntimeError(
+                "Phase 2 QP bounds are structurally incompatible with the "
+                "simplex constraints — no feasible point exists, regardless "
+                "of the IEA targets or gamma. Reasons:\n  - "
+                + bullets
+                + "\n\nNote: the QP only enforces sum=1 over the *eligible* "
+                "columns in each simplex group (those whose siblings have IEA "
+                "targets). If f_default sums to less than 1 in that slice, "
+                "the constraint is asking the bounded fractions to fill the "
+                "gap. Either widen lb/ub for the offending columns, or "
+                "revisit the eligibility filter in build_qp_inputs() so the "
+                "constraint matches the data."
+            )
+
     problem = cp.Problem(objective, constraints)
     problem.solve(solver=cp.OSQP)
 
     if problem.status == "infeasible" and enforce_varspec_bounds:
         raise RuntimeError(
             "Phase 2 QP is infeasible with enforce_varspec_bounds=True. "
-            "IEA targets demand fraction moves that exceed the per-column "
-            "lb/ub on the VariableSpecs. Either widen the bounds (pass "
-            "larger lb/ub when building the plan), lower `gamma`, or set "
+            "Structural pre-check passed, so the infeasibility is likely "
+            "numerical. Try solver=cp.CLARABEL, lower `gamma`, or set "
             "enforce_varspec_bounds=False to fall back on soft "
             "regularisation only."
         )
