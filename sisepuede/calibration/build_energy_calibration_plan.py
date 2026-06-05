@@ -144,25 +144,25 @@ def build_energy_calibration_plan(
     # ------------------------------------------------------------------ #
 
     ##  1a. INEN total
-    ##  Only scalar_inen_energy_demand_* is used here because it is a direct
+    ##  Only consumpinit_inen_energy_total_pj_* is used here because it is a direct
     ##  linear multiplier on total per-category INEN energy.  Including
-    ##  consumpinit_inen_* alongside demscalars would double-scale the
-    ##  production path (intensity x demscalar) as  
+    ##  scalar_inen_energy_demand_* alongside consumpinit_inen_* would
+    ##  double-scale the production path (intensity x demscalar) as  
     ##  energy[t] = (intensity[0] / frac_norm[0]) × driver[t] × demscalar[t]
     ##  where intensity[0] = consumpinit_inen_energy_total_pj_[cat]
     inen_scalar = [
         f for f in fields_in
-        if f.startswith("scalar_inen_energy_demand_")
+        if f.startswith("consumpinit_inen_energy_total_pj_")
     ]
     plan.add(CalibrationGroup(
         name        = "industry__industry",
         sector      = "inen",
         specs       = _make_specs(inen_scalar, lb, ub),
         iea_targets = [("INDUSTRY", "INDUSTRY")],
-        notes       = "Demand scalars for all non-agriculture INEN categories -> "
+        notes       = "Initial consumption scalars for all non-agriculture INEN categories -> "
                       "drives total industry TFC (INDUSTRY x INDUSTRY). "
-                      "consumpinit_inen_* excluded to avoid double-scaling the "
-                      "production energy path.",
+                      "scalar_inen_energy_demand_* excluded to avoid "
+                      "double-scaling the production energy path.",
     ))
 
     ##  1b. TRNS total
