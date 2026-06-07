@@ -85,6 +85,7 @@ Usage
 
 from __future__ import annotations
 
+import sys
 import warnings
 import numpy as np
 import pandas as pd
@@ -658,6 +659,8 @@ class Calibrator:
         self,
         df_in: pd.DataFrame,
         full_log: List[dict],
+        simplex_mode: str = "full_simplex",
+        enforce_varspec_bounds: bool = False,
     ) -> None:
         """Sanity-check that the raw input dataframe already satisfies sum-to-1.
 
@@ -726,16 +729,50 @@ class Calibrator:
                 f"n_cols={o['n_columns']}\n      columns={o['columns']}"
                 for o in offenders
             )
-            raise RuntimeError(
-                f"Input data violates the simplex sum-to-1 constraint for "
-                f"{len(severe)} group(s). Calibration cannot proceed: the QP "
-                "would either declare infeasibility (with bounds) or silently "
-                "renormalise the violation away (without bounds), neither of "
-                "which is safe. The underlying SISEPUEDE input file needs to "
-                f"be fixed for these groups:\n{details}\n\n"
-                "Inspect the log entries with status='input_simplex_check_*' "
-                "for the full list."
-            )
+
+            should_halt = (enforce_varspec_bounds
+                           and simplex_mode == "full_simplex")
+
+            if should_halt:
+                # Bounds=on + full_simplex + bad input is structurally
+                # infeasible. Halt with a clear message before the QP runs.
+                raise RuntimeError(
+                    f"Input data violates the simplex sum-to-1 constraint "
+                    f"for {len(severe)} group(s), and the calibration is "
+                    "configured with --enforce-varspec-bounds and "
+                    "--simplex-mode full_simplex. This combination is "
+                    "structurally infeasible: the QP would enforce sum=1 "
+                    "over a simplex whose default already sums to less than "
+                    "1, and the multiplicative bounds (e.g. [0.8, 1.2]) "
+                    "cannot stretch the fractions far enough to close the "
+                    "gap. Either (a) fix the underlying SISEPUEDE input "
+                    "file for these groups, (b) drop --enforce-varspec-bounds "
+                    "(the QP will renormalise the violation internally), or "
+                    "(c) rerun with --simplex-mode partial_sum (the bound "
+                    f"constraint then becomes trivially feasible):\n{details}"
+                    "\n\nInspect the log entries with "
+                    "status='input_simplex_check_*' for the full list."
+                )
+            else:
+                # All other (bounds, simplex_mode) combinations let
+                # calibration proceed. Print to stderr directly *and* emit a
+                # warning, so the message is visible regardless of how the
+                # caller has configured Python's warning filters.
+                msg = (
+                    f"Input data violates the simplex sum-to-1 constraint "
+                    f"for {len(severe)} group(s). The underlying SISEPUEDE "
+                    "input file is wrong for these groups and should be "
+                    f"fixed for downstream correctness:\n{details}\n\n"
+                    "Calibration will proceed because the current "
+                    f"configuration (enforce_varspec_bounds="
+                    f"{enforce_varspec_bounds}, simplex_mode="
+                    f"{simplex_mode!r}) is not structurally infeasible, but "
+                    "the result will be built on top of imperfect input. "
+                    "Inspect the log entries with "
+                    "status='input_simplex_check_*' for the full list."
+                )
+                print(f"\nWARNING: {msg}\n", file=sys.stderr, flush=True)
+                warnings.warn(msg)
 
     # ------------------------------------------------------------------
     #   Phase 2 (v2) — fuel mix via Quadratic Program
@@ -748,6 +785,7 @@ class Calibrator:
         time_period: int,
         gamma: float,
         enforce_varspec_bounds: bool = False,
+        simplex_mode: str = "full_simplex",
     ) -> Tuple[pd.DataFrame, List[dict]]:
         """v2 Phase 2: solve a single QP for all simplex fractions at once.
 
@@ -778,6 +816,7 @@ class Calibrator:
             crosswalk        = self.crosswalk,
             iea_tj           = self._iea_tj,
             simplex_registry = self.simplex_registry,
+            simplex_mode     = simplex_mode,
         )
         log.extend(qp["skipped"])
 
@@ -793,7 +832,7 @@ class Calibrator:
             f"    Solving QP: m={qp['A'].shape[0]} targets, "
             f"n={qp['A'].shape[1]} fracs, "
             f"{len(qp['sector_indices'])} simplex groups, "
-            f"gamma={gamma}{bounds_msg}..."
+            f"gamma={gamma}{bounds_msg}, simplex_mode={simplex_mode}..."
         )
         f_solved = solve_phase2_qp(
             A                      = qp["A"],
@@ -807,6 +846,7 @@ class Calibrator:
             columns                = qp["columns"],
             sector_group_ids       = qp["sector_group_ids"],
             missing_per_group      = qp["missing_per_group"],
+            simplex_mode           = simplex_mode,
         )
 
         # 4. Diagnostics: predicted residual at the solution ──────────────
@@ -856,6 +896,7 @@ class Calibrator:
         n_iter: int = 2,
         gamma: float = 100.0,
         enforce_varspec_bounds: bool = False,
+        simplex_mode: str = "full_simplex",
     ) -> Tuple[pd.DataFrame, List[dict]]:
         """Run n_iter rounds of Phase 1 (sector totals) + Phase 2 (fuel mix).
 
@@ -917,7 +958,12 @@ class Calibrator:
         # infeasibility (with bounds on) or silently mask the violation by
         # renormalisation (with bounds off). Fail fast with a clear, input-
         # data-focused error instead.
-        self._verify_input_simplex_sums(df_in, full_log)
+        self._verify_input_simplex_sums(
+            df_in,
+            full_log,
+            simplex_mode=simplex_mode,
+            enforce_varspec_bounds=enforce_varspec_bounds,
+        )
 
         for it in range(n_iter):
             print(f"\n=== Calibration iteration {it + 1}/{n_iter} ===")
@@ -968,7 +1014,7 @@ class Calibrator:
                 print(f"    applied={ok1}  skipped={skip1}")
 
                 print("  Phase 2 (v2) — fuel mix via QP:")
-                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds)
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds, simplex_mode)
                 ok2    = sum(1 for r in log2 if r.get("status") == "ok")
                 skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
                 print(f"    applied={ok2}  skipped={skip2}")
@@ -980,7 +1026,7 @@ class Calibrator:
                 })
             elif option == 4:
                 print("  Phase 2 (v2) only — fuel mix via QP:")
-                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds)
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds, simplex_mode)
                 ok2    = sum(1 for r in log2 if r.get("status") == "ok")
                 skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
                 print(f"    applied={ok2}  skipped={skip2}")
@@ -1063,6 +1109,12 @@ class Calibrator:
         """
         rows = []
         for entry in log:
+            # Pre-iteration entries (e.g. status='input_simplex_check_*'
+            # appended by _verify_input_simplex_sums) are flat dicts with no
+            # 'iteration' / 'phase1' / 'phase2' keys. Skip them here; the
+            # raw log still contains them for callers who want to inspect.
+            if "iteration" not in entry:
+                continue
             it = entry["iteration"]
             phases = [(k, entry[k]) for k in ("phase1", "phase2") if k in entry]
             for phase_key, phase_log in phases:

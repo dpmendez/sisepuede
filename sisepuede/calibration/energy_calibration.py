@@ -400,6 +400,7 @@ def energy_calibration(
     tag:                    str = "",
     gamma:                  float = 100.0,
     enforce_varspec_bounds: bool = False,
+    simplex_mode:           str = "full_simplex",
     verbose:                bool = True,
 ) -> dict:
     """Run the full energy calibration pipeline and persist all artefacts.
@@ -509,6 +510,7 @@ def energy_calibration(
         option                 = cal_option,
         gamma                  = gamma,
         enforce_varspec_bounds = enforce_varspec_bounds,
+        simplex_mode           = simplex_mode,
     )
     df_log = calibrator.log_summary(log)
 

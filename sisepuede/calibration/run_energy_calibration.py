@@ -52,6 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="QP regularisation weight, used when cal-option in {3,4} (default: 100.0).")
     p.add_argument("--enforce-varspec-bounds", action="store_true",
                    help="Enforce VariableSpec bounds in the QP (cal-option in {3,4}).")
+    p.add_argument("--simplex-mode", type=str, default="full_simplex",
+                   choices=["full_simplex", "partial_sum"],
+                   help=(
+                       "How the Phase-2 QP treats the simplex constraint when "
+                       "only some fuels of a simplex group have IEA targets. "
+                   ))
 
     # Time window
     p.add_argument("--start-year",     type=int, default=2015,
@@ -98,6 +104,7 @@ def main() -> None:
         tag                    = args.tag,
         gamma                  = args.gamma,
         enforce_varspec_bounds = args.enforce_varspec_bounds,
+        simplex_mode           = args.simplex_mode,
         verbose                = not args.quiet,
     )
 

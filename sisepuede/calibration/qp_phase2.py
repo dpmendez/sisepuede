@@ -174,6 +174,11 @@ def _subsector_total(
     return sum_fields_at_time_period(df_out, time_period, [fmt])
 
 
+SIMPLEX_MODE_PARTIAL = "partial_sum"
+SIMPLEX_MODE_FULL    = "full_simplex"
+_VALID_SIMPLEX_MODES = (SIMPLEX_MODE_PARTIAL, SIMPLEX_MODE_FULL)
+
+
 def build_qp_inputs(
     plan: CalibrationPlan,
     df_in: pd.DataFrame,
@@ -182,6 +187,7 @@ def build_qp_inputs(
     crosswalk,
     iea_tj: Dict[Tuple[str, str], float],
     simplex_registry: SimplexRegistry,
+    simplex_mode: str = SIMPLEX_MODE_FULL,
 ) -> Dict[str, object]:
     """Build the matrices and vectors for the Phase-2 QP.
 
@@ -262,6 +268,12 @@ def build_qp_inputs(
         }
 
     # 2. Column ordering: union of all eligible columns, deduped ───────────
+    if simplex_mode not in _VALID_SIMPLEX_MODES:
+        raise ValueError(
+            f"simplex_mode must be one of {_VALID_SIMPLEX_MODES}; got "
+            f"{simplex_mode!r}."
+        )
+
     seen: set = set()
     columns: List[str] = []
     for _, _, _, _, _, cols in eligible:
@@ -269,6 +281,22 @@ def build_qp_inputs(
             if c not in seen:
                 seen.add(c)
                 columns.append(c)
+
+    # 2b. In full_simplex mode, expand the column set to include every
+    # registry-defined simplex sibling of any column already in `columns`.
+    # Un-targeted siblings contribute zero rows to A (no IEA target row
+    # touches them) and get default lb/ub (0, inf), so gamma alone pins
+    # them near f_default. The point of the expansion is to make
+    # `sum(f) == 1` over the *full* simplex, rather than a partial slice.
+    if simplex_mode == SIMPLEX_MODE_FULL:
+        gids_in_qp = {simplex_registry.group_id(c) for c in columns}
+        gids_in_qp.discard(None)
+        for gid in sorted(gids_in_qp):
+            for sib in simplex_registry.columns_in_group(gid):
+                if sib in df_in.columns and sib not in seen:
+                    seen.add(sib)
+                    columns.append(sib)
+
     col_idx = {c: i for i, c in enumerate(columns)}
     n = len(columns)
 
@@ -375,6 +403,7 @@ def _diagnose_bound_infeasibility(
     columns: Optional[List[str]] = None,
     sector_group_ids: Optional[List[int]] = None,
     missing_per_group: Optional[Dict[int, List[str]]] = None,
+    simplex_mode: str = SIMPLEX_MODE_FULL,
     tol: float = 1e-9,
 ) -> List[str]:
     """Return a list of human-readable reasons the bounded QP is infeasible.
@@ -412,10 +441,19 @@ def _diagnose_bound_infeasibility(
     for g, idx in enumerate(sector_indices):
         if len(idx) == 0:
             continue
+        # Un-targeted siblings carry ub=inf and lb=0 by default. inf*0 in
+        # numpy is nan, so guard the upper sum with where(f_default>0).
         sum_lb = float(np.sum(lb_per_col[idx] * f_default[idx]))
-        sum_ub = float(np.sum(ub_per_col[idx] * f_default[idx]))
+        with np.errstate(invalid="ignore"):
+            ub_contrib = np.where(
+                f_default[idx] > 0.0,
+                ub_per_col[idx] * f_default[idx],
+                0.0,
+            )
+        sum_ub = float(np.sum(ub_contrib))
         sum_def = float(np.sum(f_default[idx]))
-        if 1.0 < sum_lb - tol or 1.0 > sum_ub + tol:
+        target = 1.0 if simplex_mode == SIMPLEX_MODE_FULL else sum_def
+        if target < sum_lb - tol or target > sum_ub + tol:
             col_names = (
                 [columns[j] for j in idx] if columns else [f"col[{j}]" for j in idx]
             )
@@ -437,8 +475,9 @@ def _diagnose_bound_infeasibility(
             )
             reasons.append(
                 f"{gid_label}: reachable sum in [{sum_lb:.4f}, {sum_ub:.4f}] "
-                f"but constraint requires 1.0 "
-                f"(sum(f_default[idx])={sum_def:.4f}, n_cols={len(idx)})."
+                f"but constraint requires {target:.4f} "
+                f"(simplex_mode={simplex_mode}, "
+                f"sum(f_default[idx])={sum_def:.4f}, n_cols={len(idx)})."
                 f"\n    In QP: {col_names}"
                 f"{missing_line}"
             )
@@ -458,6 +497,7 @@ def solve_phase2_qp(
     columns: Optional[List[str]] = None,
     sector_group_ids: Optional[List[int]] = None,
     missing_per_group: Optional[Dict[int, List[str]]] = None,
+    simplex_mode: str = SIMPLEX_MODE_FULL,
 ) -> np.ndarray:
     """Solve the Phase-2 QP.
 
@@ -502,6 +542,12 @@ def solve_phase2_qp(
     if n == 0:
         return np.zeros(0)
 
+    if simplex_mode not in _VALID_SIMPLEX_MODES:
+        raise ValueError(
+            f"simplex_mode must be one of {_VALID_SIMPLEX_MODES}; got "
+            f"{simplex_mode!r}."
+        )
+
     f = cp.Variable(n)
     objective = cp.Minimize(
         cp.sum_squares(A @ f - b)
@@ -511,7 +557,17 @@ def solve_phase2_qp(
     for idx in sector_indices:
         if len(idx) == 0:
             continue
-        constraints.append(cp.sum(f[idx]) == 1)
+        # full_simplex: classic sum-to-1 over the entire simplex (only
+        # safe when build_qp_inputs expanded to include all siblings).
+        # partial_sum: preserve f_default's partial sum over the subset;
+        # downstream Aitchison renormalisation restores sum-to-1 across
+        # the full simplex.
+        rhs = (
+            1.0
+            if simplex_mode == SIMPLEX_MODE_FULL
+            else float(np.sum(f_default[idx]))
+        )
+        constraints.append(cp.sum(f[idx]) == rhs)
 
     if enforce_varspec_bounds:
         if lb_per_col is None or ub_per_col is None:
@@ -532,6 +588,7 @@ def solve_phase2_qp(
             columns=columns,
             sector_group_ids=sector_group_ids,
             missing_per_group=missing_per_group,
+            simplex_mode=simplex_mode,
         )
         if reasons:
             bullets = "\n  - ".join(reasons)
