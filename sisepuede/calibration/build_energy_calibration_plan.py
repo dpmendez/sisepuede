@@ -297,16 +297,16 @@ def build_energy_calibration_plan(
         if not tes_vars:
             continue
 
-        plan.add(CalibrationGroup(
-            name        = f"indprod__{iea_fuel.lower()}",
-            sector      = ["inen", "trns", "scoe", "enfu"],
-            specs       = _make_specs(tes_vars, lb, ub),
-            iea_targets = [("INDPROD", iea_fuel)],
-            notes       = f"All fuel-fraction inputs (inen+trns+scoe) and import "
-                          f"fraction for {iea_fuel} -> drives TES (INDPRODx{iea_fuel}).  "
-                          f"Overlaps with rows 4/6/7/8; variables are de-duplicated "
-                          f"when plan is used in bulk mode.",
-        ))
+        # plan.add(CalibrationGroup(
+        #     name        = f"indprod__{iea_fuel.lower()}",
+        #     sector      = ["inen", "trns", "scoe", "enfu"],
+        #     specs       = _make_specs(tes_vars, lb, ub),
+        #     iea_targets = [("INDPROD", iea_fuel)],
+        #     notes       = f"All fuel-fraction inputs (inen+trns+scoe) and import "
+        #                   f"fraction for {iea_fuel} -> drives TES (INDPRODx{iea_fuel}).  "
+        #                   f"Overlaps with rows 4/6/7/8; variables are de-duplicated "
+        #                   f"when plan is used in bulk mode.",
+        # ))
 
     # ------------------------------------------------------------------ #
     #  ROW 3 – Energy Imports and Exports, by fuel                       #

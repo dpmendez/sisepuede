@@ -158,11 +158,11 @@ _ISO_TO_IEA_FILENAME: Dict[str, str] = {
 ##                       "fixed"            — both balance_fixed and product_fixed set (B)
 ##    balance_prefix : prefix for imports_exports mode (e.g. "COAL" -> COALIMPORTS)
 _FOLDER_CONFIG: Dict[str, Dict] = {
-    "total_energy_supply": {
-        "format":         "A",
-        "balance_fixed":  "INDPROD",
-        "mode":           "product_from_row",
-    },
+    # "total_energy_supply": {
+    #     "format":         "A",
+    #     "balance_fixed":  "INDPROD",
+    #     "mode":           "product_from_row",
+    # },
     "total_final_energy_consumption": {
         "format":         "A",
         "balance_fixed":  None,
