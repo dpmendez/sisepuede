@@ -124,6 +124,28 @@ _ROW_LABEL_TO_PRODUCT_TFC: Dict[str, str] = {
     "agriculture":                              "AGRICULT",
 }
 
+##  ISO-3 -> IEA filename country name
+##  IEA filenames use short common names (e.g. "Tanzania", "Korea") while the
+##  SISEPUEDE region names use long official forms ("united_republic_of_tanzania")
+##  so region.replace("_", " ").title() search string can miss files.
+##  Add an entry here whenever an ISO maps to a SISEPUEDE region name that does
+##  not appear as a substring in the IEA filename.
+_ISO_TO_IEA_FILENAME: Dict[str, str] = {
+    "TZA": "Tanzania",
+    "IRN": "Iran",
+    "RUS": "Russia",
+    "BOL": "Bolivia",
+    "VEN": "Venezuela",
+    "VNM": "Viet Nam",
+    "KOR": "Korea",
+    "PRK": "Korea, Democratic People's Republic of",
+    "MDA": "Moldova",
+    "USA": "United States",
+    "COD": "Democratic Republic of the Congo",
+    "COG": "Congo",
+    "SYR": "Syrian Arab Republic",
+}
+
 ##  Folder -> parsing configuration
 ##    format         : "A" (row-label format) or "B" (year-leading format)
 ##    balance_fixed  : iea_balance_code shared by every row (None if determined per-row)
@@ -590,15 +612,22 @@ class IEADataLoader:
 
         ##  Resolve country name for filename search
         if country_name is None:
-            region = self._region_name_from_iso(iso)
-            if region is None:
-                raise ValueError(
-                    f"ISO '{iso}' not found in SISEPUEDE regions. "
-                    "Pass country_name explicitly."
-                )
-            ##  Convert region name to title case for filename matching
-            ##  e.g. "united_arab_emirates" -> "United Arab Emirates"
-            country_name = region.replace("_", " ").title()
+            ##  Prefer the explicit IEA-filename alias when one is registered:
+            ##  some ISO codes map to SISEPUEDE region names (e.g.
+            ##  "united_republic_of_tanzania") that don't appear in the IEA
+            ##  filenames (which use "Tanzania").
+            country_name = _ISO_TO_IEA_FILENAME.get(iso)
+
+            if country_name is None:
+                region = self._region_name_from_iso(iso)
+                if region is None:
+                    raise ValueError(
+                        f"ISO '{iso}' not found in SISEPUEDE regions. "
+                        "Pass country_name explicitly."
+                    )
+                ##  Convert region name to title case for filename matching
+                ##  e.g. "united_arab_emirates" -> "United Arab Emirates"
+                country_name = region.replace("_", " ").title()
 
         ##  Load and parse each folder
         frames = []
