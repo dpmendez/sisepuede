@@ -213,6 +213,24 @@ class CalibrationGroup:
         return df_comparison[mask]
 
     # ------------------------------------------------------------------ #
+    #    Mutators                                                        #
+    # ------------------------------------------------------------------ #
+
+    def set_bounds(self, lb: float, ub: float) -> "CalibrationGroup":
+        """Overwrite the LHS/QP scale-factor bounds on every spec in this group.
+
+        Useful when the global defaults from build_energy_calibration_plan are
+        too tight for a particular sector (e.g. ENTC capacity knobs typically
+        need a wider [0.5, 1.5] envelope than the consumption-side defaults).
+
+        Returns self so calls can be chained.
+        """
+        for spec in self.specs:
+            spec.lb = lb
+            spec.ub = ub
+        return self
+
+    # ------------------------------------------------------------------ #
     #    Display                                                           #
     # ------------------------------------------------------------------ #
 
