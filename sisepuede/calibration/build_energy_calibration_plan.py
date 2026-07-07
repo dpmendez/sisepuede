@@ -434,6 +434,7 @@ def build_energy_calibration_plan(
         "nemomod_entc_total_annual_max_capacity_",
         "nemomod_entc_total_annual_min_capacity_",
         "nemomod_entc_scalar_availability_factor_",
+        "efficfactor_entc_technology_fuel_use_",
     ]
     for tech, iea_fuel in _ENTC_TECH_TO_IEA.items():
         for prefix in _ENTC_PREFIXES:
