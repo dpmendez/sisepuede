@@ -144,25 +144,36 @@ def build_energy_calibration_plan(
     # ------------------------------------------------------------------ #
 
     ##  1a. INEN total
-    ##  Only consumpinit_inen_energy_total_pj_* is used here because it is a direct
-    ##  linear multiplier on total per-category INEN energy.  Including
-    ##  scalar_inen_energy_demand_* alongside consumpinit_inen_* would
-    ##  double-scale the production path (intensity x demscalar) as  
-    ##  energy[t] = (intensity[0] / frac_norm[0]) × driver[t] × demscalar[t]
-    ##  where intensity[0] = consumpinit_inen_energy_total_pj_[cat]
+    ##  Only scalar_inen_energy_demand_* is used here because it is the direct
+    ##  linear multiplier on total per-category INEN energy applied by the model.
+    ##  See project_industrial_energy() in models/energy_consumption.py -- the
+    ##  non-agriculture INEN energy for category cat is:
+    ##      E_cat(t) = (I_prod,0[cat] × P_cat(t) + I_gdp,0[cat] × GDP(t))
+    ##                 × scalar_inen_energy_demand_[cat](t)
+    ##  where
+    ##      I_prod,0 = consumpinit_inen_energy_tj_per_tonne_production_[cat]
+    ##      I_gdp,0  = consumpinit_inen_energy_tj_per_mmm_gdp_[cat]
+    ##  The scalar_inen_energy_demand_[cat] factor multiplies the whole
+    ##  expression, so scaling it by X scales E_cat by exactly X in one pass --
+    ##  no double-counting because consumpinit_inen_energy_total_pj_[cat] is not
+    ##  read by the non-agriculture INEN pipeline at all (it is only consulted
+    ##  for agriculture_and_livestock, via the modvar_inen_energy_conumption_agrc_init
+    ##  variable, and that is handled by the agricult__agricult group below).
     inen_scalar = [
         f for f in fields_in
-        if f.startswith("consumpinit_inen_energy_total_pj_")
+        if f.startswith("scalar_inen_energy_demand_")
     ]
     plan.add(CalibrationGroup(
         name        = "industry__industry",
         sector      = "inen",
         specs       = _make_specs(inen_scalar, lb, ub),
         iea_targets = [("INDUSTRY", "INDUSTRY")],
-        notes       = "Initial consumption scalars for all non-agriculture INEN categories -> "
+        notes       = "Demand scalars for all non-agriculture INEN categories -> "
                       "drives total industry TFC (INDUSTRY x INDUSTRY). "
-                      "scalar_inen_energy_demand_* excluded to avoid "
-                      "double-scaling the production energy path.",
+                      "consumpinit_inen_energy_total_pj_* excluded because the "
+                      "model does not read it for non-agriculture INEN categories "
+                      "(only for agriculture, which the agricult__agricult group "
+                      "calibrates separately).",
     ))
 
     ##  1b. TRNS total
