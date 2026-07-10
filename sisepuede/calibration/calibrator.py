@@ -1,0 +1,1202 @@
+"""
+sisepuede/calibration/calibrator.py
+
+Calibrator
+----------
+Two-phase calibration engine that adjusts SISEPUEDE energy inputs to match
+IEA World Energy Balance targets at a reference year.
+
+The calibration problem
+-----------------------
+IEA reports energy by sector AND by fuel. Think of the targets as a matrix:
+
+           TOTAL    COAL    OIL    NATGAS    ELECTR
+INDUSTRY   500 TJ   50      100    80        150
+TRANSPORT  300 TJ    —      200     —         80
+RESIDENT   150 TJ   20       30    50         50
+
+Two distinct sets of input parameters control these two dimensions:
+
+  Phase 1 — Scalar groups (row totals)
+      Parameters: consumpinit_*, scalar_inen_energy_demand_*,
+                  fuelefficiency_trns_*, avgload_trns_*, occrate_trns_*
+      Target:     sector-total TFC  (INDUSTRYxTOTAL, TRANSPORTxTRANSPORT, etc.)
+      Method:     Run model once -> compute ratio (iea / model) -> scale inputs
+
+  Phase 2 — Simplex groups (column shares within each row)
+      Parameters: frac_inen_energy_*, frac_trns_fuelmix_*, frac_scoe_heat_energy_*
+      Target:     fuel share within sector  (INDUSTRYxCOAL, TRANSPORTxOIL, etc.)
+      Method:     Run model once -> compute current share vs. IEA share ->
+                  scale fracs -> Aitchison renormalization (simplex constraint preserved)
+
+Why this decomposition works
+-----------------------------
+Scaling consumpinit_* changes how much energy is consumed in total, but leaves
+the fuel fractions (frac_* variables) unchanged -> row totals move, column
+shares stay fixed.
+
+Adjusting frac_* shifts the fuel mix, but frac_* variables sum to 1 within
+each category -> column shares move, the total demand is unchanged.
+
+This independence means the two phases do not fight each other. Iterating
+2–3 times handles the small residual coupling that does exist (e.g. fuel
+efficiency inputs affect both total demand and fuel mix slightly).
+
+Efficiency
+----------
+Each phase runs the model ONCE to collect current outputs, computes all
+corrections from that single run, then applies them together. This costs
+2 model runs per iteration (1 for Phase 1, 1 for Phase 2).
+
+Reference time period
+---------------------
+Calibration targets the row corresponding to `year_target` in df_input.
+Only values at that time period are used to compute correction scalars; the
+scalar is then applied uniformly across all time periods (preserving the shape
+of any pre-existing trajectory while shifting the level).
+
+Usage
+-----
+    from sisepuede.calibration.calibrator import Calibrator
+    from sisepuede.calibration.build_energy_calibration_plan import (
+        build_energy_calibration_plan,
+    )
+
+    plan = build_energy_calibration_plan(model_attributes)
+
+    calibrator = Calibrator(
+        models       = models,       # SISEPUEDEModels instance
+        crosswalk    = xw,           # IEACrosswalk instance
+        df_iea_long  = df_iea,       # IEA long frame (output of IEADataLoader.load_country)
+        year_target  = 2019,         # calibrate to this historical year
+    )
+
+    # See baseline error before calibration
+    df_before = calibrator.evaluate(df_input)
+    print(xw.summary(df_before))
+
+    # Run calibration
+    df_calibrated, log = calibrator.calibrate(df_input, plan, n_iter=2)
+
+    # See residual error after calibration
+    df_after = calibrator.evaluate(df_calibrated)
+    print(xw.summary(df_after))
+"""
+
+from __future__ import annotations
+
+import sys
+import warnings
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Optional, Tuple
+
+from sisepuede.calibration._df_helpers import (
+    attach_year_column,
+    sum_fields_at_time_period,
+)
+from sisepuede.calibration.calibration_group import CalibrationGroup, CalibrationPlan
+from sisepuede.calibration.sensitivity import VariableSpec, apply_perturbations
+from sisepuede.calibration._simplex_registry import SimplexRegistry
+from sisepuede.calibration.qp_phase2 import (
+    apply_qp_solution,
+    build_qp_inputs,
+    solve_phase2_qp,
+)
+
+
+def _resolve_registry(models, crosswalk) -> SimplexRegistry:
+    """Derive a SimplexRegistry from whatever context is available.
+
+    Searched in order:
+        1. models.model_attributes
+        2. crosswalk.model_attributes
+        3. empty registry
+
+    An empty registry is only safe for calibration plans that contain no
+    simplex groups. If a simplex group is encountered and the registry is
+    empty, apply_perturbations will raise a clear error at use time.
+    """
+    for src in (models, crosswalk):
+        matt = getattr(src, "model_attributes", None)
+        if matt is not None:
+            return SimplexRegistry.from_model_attributes(matt)
+    return SimplexRegistry.empty()
+
+
+##########################
+#    CALIBRATOR          #
+##########################
+
+class Calibrator:
+    """Two-phase energy calibration engine.
+
+    Parameters
+    ----------
+    models : SISEPUEDEModels
+        Initialised model object exposing a .project(df) method.
+    crosswalk : IEACrosswalk
+        Initialised crosswalk object.
+    df_iea_long : pd.DataFrame
+        Raw IEA long frame for one country (output of IEADataLoader.load_country).
+        Must contain columns: iea_balance_code, iea_product_code, year, value_iea_tj.
+    year_target : int
+        Calendar year to calibrate to (must be present in df_iea_long).
+    include_energy_production : bool
+        Pass True only when calibrating ENTC variables that require the Julia
+        EnergyProduction back-end. Default False (consumption-only model).
+    simplex_registry : SimplexRegistry | None
+        Authoritative lookup for simplex-group membership.  When None, the
+        calibrator derives one from `models.model_attributes` (or
+        `crosswalk.model_attributes` as a fallback).  Pass one explicitly
+        when running in contexts where no ModelAttributes object is
+        available (e.g. surrogate-based calibration).
+    """
+
+    def __init__(
+        self,
+        models,
+        crosswalk,
+        df_iea_long: pd.DataFrame,
+        year_target: int,
+        include_energy_production: bool = False,
+        simplex_registry: Optional[SimplexRegistry] = None,
+    ) -> None:
+
+        self.models                    = models
+        self.crosswalk                 = crosswalk
+        self.df_iea_long               = df_iea_long.copy()
+        self.year_target               = year_target
+        self.include_energy_production = include_energy_production
+        self.simplex_registry          = (
+            simplex_registry
+            if simplex_registry is not None
+            else _resolve_registry(models, crosswalk)
+        )
+
+        # Pre-extract all IEA values for year_target once.
+        # Keys: (iea_balance_code, iea_product_code) -> value in TJ.
+        self._iea_tj: Dict[Tuple[str, str], float] = self._cache_iea_values()
+
+    # ------------------------------------------------------------------
+    #   IEA value lookup
+    # ------------------------------------------------------------------
+
+    def _cache_iea_values(self) -> Dict[Tuple[str, str], float]:
+        """Build {(balance, product): value_tj} for year_target from df_iea_long."""
+        df = self.df_iea_long[self.df_iea_long["year"] == self.year_target]
+
+        if df.empty:
+            available = sorted(self.df_iea_long["year"].unique())
+            raise ValueError(
+                f"No IEA data for year {self.year_target}. "
+                f"Available years: {available}"
+            )
+
+        cache: Dict[Tuple[str, str], float] = {}
+        for _, row in df.iterrows():
+            key = (str(row["iea_balance_code"]), str(row["iea_product_code"]))
+            val = row["value_iea_tj"]
+            if pd.notna(val):
+                cache[key] = float(val)
+
+        return cache
+
+    def _iea_tj_value(self, balance: str, product: str) -> Optional[float]:
+        """Return IEA value in TJ for (balance, product), or None if missing."""
+        return self._iea_tj.get((balance, product))
+
+    def _iea_to_ssp_units(self, balance: str, product: str) -> Optional[float]:
+        """Return the IEA target converted to SSP native units (typically PJ).
+
+        The crosswalk stores unit_conversion_to_tj = factor such that
+            ssp_value * unit_conversion_to_tj = value_in_tj
+        To go the other way:
+            target_ssp = iea_tj / unit_conversion_to_tj
+        """
+        tj = self._iea_tj_value(balance, product)
+        if tj is None:
+            return None
+
+        entry = self.crosswalk.get_crosswalk_entry(balance, product)
+        if entry is None:
+            return None
+
+        conv = float(entry.get("unit_conversion_to_tj", 1.0))
+        if conv == 0.0:
+            return None
+
+        return tj / conv
+
+    # ------------------------------------------------------------------
+    #   Model runner helpers
+    # ------------------------------------------------------------------
+
+    def _run_model(self, df_in: pd.DataFrame) -> pd.DataFrame:
+        """Run the SISEPUEDE model and return the output DataFrame."""
+        from sisepuede.manager.sisepuede_models import SISEPUEDEModels
+
+        if isinstance(self.models, SISEPUEDEModels):
+            return self.models.project(
+                df_in,
+                include_electricity_in_energy=self.include_energy_production,
+            )
+        return self.models.project(df_in)
+
+    def _get_time_period(self, df_in: pd.DataFrame) -> int:
+        """Return the time_period integer that corresponds to year_target.
+
+        Raises ValueError if year_target is not found in df_in.
+        """
+        if "year" not in df_in.columns:
+            raise ValueError(
+                "df_in must have a 'year' column mapping time_period to "
+                "calendar year. Add it before calling Calibrator."
+            )
+
+        match = df_in.loc[df_in["year"] == self.year_target, "time_period"]
+        if match.empty:
+            raise ValueError(
+                f"year_target={self.year_target} not found in df_in. "
+                f"Available years: {sorted(df_in['year'].unique())}"
+            )
+
+        return int(match.iloc[0])
+
+    def _is_simplex_constrained_group(self, group: CalibrationGroup) -> bool:
+        """Return True if any column in `group` is part of a simplex group.
+
+        Decision: Row 2 of build_energy_calibration_plan contains scalar groups
+        whose knobs are simplex-constrained variables (fuel fractions that
+        must sum to 1 per category). Treating them as freely scalable would
+        violate the simplex constraint. We skip these in Phase 1 — their
+        targets are reached indirectly through Phase 2.
+
+        Membership is resolved authoritatively from the SimplexRegistry, not
+        by inspecting column name prefixes. This is robust to variable
+        renaming and to groups whose names do not start with "frac_".
+        """
+        return any(
+            self.simplex_registry.is_simplex(col) for col in group.columns
+        )
+
+    # ------------------------------------------------------------------
+    #   Phase 1 — calibrate sector totals (scalar groups)
+    # ------------------------------------------------------------------
+
+    def _phase1_totals(
+        self,
+        df_in: pd.DataFrame,
+        plan: CalibrationPlan,
+        time_period: int,
+    ) -> Tuple[pd.DataFrame, List[dict]]:
+        """Scale consumpinit_*, scalar_*, and efficiency inputs to hit sector totals.
+
+        Decision: run the model ONCE on the current df_in to measure all sector
+        outputs simultaneously. Then compute correction scalars for every group
+        and apply them in a single pass. This costs 1 model run for the whole
+        phase regardless of how many groups there are.
+
+        This is safe because scalar groups for different sectors (INEN, TRNS,
+        SCOE) control different input columns and different output fields — they
+        do not interact. Applying their scalars in any order (or all at once)
+        gives the same result.
+
+        Scalar formula:
+            scalar = target_ssp / current_ssp
+
+        where current_ssp is the model output summed over the SSP fields that
+        correspond to the IEA target, at time_period, in SSP native units.
+        """
+        log: List[dict] = []
+
+        # ── 1. One model run to measure current outputs ──────────────────────
+        print("    Running model (Phase 1 baseline)...", end=" ", flush=True)
+        df_out = self._run_model(df_in)
+        print("done")
+
+        available_output_cols = set(df_out.columns)
+
+        # ── 2. Compute and apply scalars for each eligible scalar group ──────
+        df = df_in.copy()
+
+        for group in plan.scalar_groups():
+
+            # Skip groups whose knobs are simplex-constrained (handled in Phase 2).
+            # Membership comes from the SimplexRegistry, not from name inspection.
+            if self._is_simplex_constrained_group(group):
+                log.append({"group": group.name, "phase": 1, "status": "skipped_simplex_group"})
+                continue
+
+            # Calibrate to the first iea_target (primary target of this group).
+            if not group.iea_targets:
+                log.append({"group": group.name, "phase": 1, "status": "skipped_no_targets"})
+                continue
+
+            bal, prod = group.iea_targets[0]
+
+            # Get IEA target in SSP units (usually PJ)
+            target_ssp = self._iea_to_ssp_units(bal, prod)
+            if target_ssp is None:
+                warnings.warn(
+                    f"Phase 1 — group '{group.name}': no IEA data for "
+                    f"({bal}, {prod}) in year {self.year_target}. Skipping."
+                )
+                log.append({"group": group.name, "phase": 1, "status": "skipped_no_iea",
+                            "target": (bal, prod)})
+                continue
+
+            # Get SSP output fields from crosswalk, filtered to available columns
+            ssp_fields = [
+                f for f in self.crosswalk.get_ssp_fields_for_target(bal, prod)
+                if f in available_output_cols
+            ]
+            if not ssp_fields:
+                warnings.warn(
+                    f"Phase 1 — group '{group.name}': no SSP output fields found "
+                    f"for ({bal}, {prod}). Skipping."
+                )
+                log.append({"group": group.name, "phase": 1, "status": "skipped_no_ssp_fields",
+                            "target": (bal, prod)})
+                continue
+
+            # Measure current model output at the target time period
+            current_ssp = sum_fields_at_time_period(df_out, time_period, ssp_fields)
+
+            if current_ssp == 0.0:
+                warnings.warn(
+                    f"Phase 1 — group '{group.name}': current model output is 0 "
+                    f"for ({bal}, {prod}). Cannot compute scalar. Skipping."
+                )
+                log.append({"group": group.name, "phase": 1, "status": "skipped_zero_current",
+                            "target": (bal, prod)})
+                continue
+
+            scalar = target_ssp / current_ssp
+
+            # Filter group columns to those that exist in df_in
+            input_cols = [c for c in group.columns if c in df.columns]
+            if not input_cols:
+                log.append({"group": group.name, "phase": 1, "status": "skipped_no_input_cols"})
+                continue
+
+            # Apply scalar uniformly across all time periods.
+            # This preserves the shape of any pre-existing trajectory while
+            # shifting the level to match the IEA target year.
+            df[input_cols] = df[input_cols] * scalar
+
+            log.append({
+                "group":       group.name,
+                "phase":       1,
+                "target":      (bal, prod),
+                "current_ssp": round(current_ssp, 4),
+                "target_ssp":  round(target_ssp,  4),
+                "scalar":      round(scalar, 4),
+                "status":      "ok",
+            })
+
+        return df, log
+
+    # ------------------------------------------------------------------
+    #   Phase 2 — calibrate fuel mix (simplex groups)
+    # ------------------------------------------------------------------
+
+    def _phase2_fuel_mix(
+        self,
+        df_in: pd.DataFrame,
+        plan: CalibrationPlan,
+        time_period: int,
+    ) -> Tuple[pd.DataFrame, List[dict]]:
+        """Adjust frac_* to match per-fuel IEA targets within each sector.
+
+        Decision: run the model ONCE to measure all current fuel shares. Then
+        compute scale factors for all simplex groups and apply them together via
+        Aitchison renormalization (apply_perturbations), which handles the
+        simplex constraint correctly: fracs continue to sum to 1.
+
+        Scale factor formula:
+            target_share  = iea_fuel_tj / iea_sector_total_tj
+            current_share = model_fuel_pj / model_sector_total_pj
+            scale         = target_share / current_share
+
+        The scale is applied to frac_* columns (not to absolute energy values),
+        which is correct: scaling a fraction by target/current shifts the share
+        of that fuel up or down, and the renormalization step keeps everything
+        summing to 1.
+
+        Sector total lookup convention:
+            For a simplex group targeting (INDUSTRY, COAL), the sector total
+            is (INDUSTRY, INDUSTRY) — i.e., the product code equals the balance
+            code. This is the convention used in build_energy_calibration_plan.
+            Rows 6-8 target (RESIDENTxCOAL), (COMMPUBxOIL), etc., with totals
+            at (RESIDENTxRESIDENT), (COMMPUBxCOMMPUB).
+        """
+        log: List[dict] = []
+
+        # ── 1. One model run to measure current fuel-share outputs ───────────
+        print("    Running model (Phase 2 baseline)...", end=" ", flush=True)
+        df_out = self._run_model(df_in)
+        print("done")
+
+        # ── 2. Compute scale factor for every simplex group ──────────────────
+        # Accumulate into a {column: scale} dict and a flat specs list.
+        # apply_perturbations will handle the Aitchison renormalization.
+        variable_scales: Dict[str, float] = {}
+        specs_all:       List[VariableSpec] = []
+
+        for group in plan.simplex_groups():
+            if not group.iea_targets:
+                continue
+
+            bal, prod = group.iea_targets[0]
+
+            # ── IEA values ───────────────────────────────────────────────────
+            iea_fuel_tj  = self._iea_tj_value(bal, prod)
+            # Sector total: by convention (INDUSTRY, INDUSTRY), (RESIDENT, RESIDENT), etc.
+            iea_total_tj = self._iea_tj_value(bal, bal)
+
+            if iea_fuel_tj is None:
+                log.append({"group": group.name, "phase": 2, "status": "skipped_no_iea_fuel",
+                            "target": (bal, prod)})
+                continue
+
+            if iea_total_tj is None or iea_total_tj == 0.0:
+                log.append({"group": group.name, "phase": 2, "status": "skipped_no_iea_total",
+                            "target": (bal, prod)})
+                continue
+
+            target_share = iea_fuel_tj / iea_total_tj
+
+            # ── Current model shares ─────────────────────────────────────────
+            ssp_fuel_fields  = self.crosswalk.get_ssp_fields_for_target(bal, prod)
+            ssp_total_fields = self.crosswalk.get_ssp_fields_for_target(bal, bal)
+
+            if not ssp_fuel_fields or not ssp_total_fields:
+                log.append({"group": group.name, "phase": 2,
+                            "status": "skipped_no_crosswalk", "target": (bal, prod)})
+                continue
+
+            current_fuel_ssp  = sum_fields_at_time_period(df_out, time_period, ssp_fuel_fields)
+            current_total_ssp = sum_fields_at_time_period(df_out, time_period, ssp_total_fields)
+
+            if current_total_ssp == 0.0:
+                log.append({"group": group.name, "phase": 2,
+                            "status": "skipped_zero_total", "target": (bal, prod)})
+                continue
+
+            current_share = current_fuel_ssp / current_total_ssp
+
+            if current_share < 1e-9:
+                # Fuel is essentially absent in the model but IEA says it should
+                # have a non-zero share. Scaling from zero is undefined — skip.
+                warnings.warn(
+                    f"Phase 2 — group '{group.name}': current share ≈ 0 for "
+                    f"({bal}, {prod}) but IEA target share = {target_share:.4f}. "
+                    "Cannot scale from zero. Skipping."
+                )
+                log.append({"group": group.name, "phase": 2,
+                            "status": "skipped_zero_current_share", "target": (bal, prod),
+                            "target_share": round(target_share, 4)})
+                continue
+
+            scale = target_share / current_share
+
+            # Record scale for all columns in this group.
+            # When a column appears in multiple groups (e.g. same frac appears
+            # in Row 2 and Row 6), the last scale wins. In practice this should
+            # not occur because simplex groups partition the frac columns by
+            # (sector x fuel). A warning is emitted if it does.
+            for spec in group.specs:
+                if spec.column in variable_scales:
+                    warnings.warn(
+                        f"Column '{spec.column}' appears in multiple simplex groups. "
+                        f"Previous scale {variable_scales[spec.column]:.4f} overwritten "
+                        f"by {scale:.4f} from group '{group.name}'."
+                    )
+                variable_scales[spec.column] = scale
+                specs_all.append(spec)
+
+            log.append({
+                "group":          group.name,
+                "phase":          2,
+                "target":         (bal, prod),
+                "iea_fuel_tj":    round(iea_fuel_tj,    2),
+                "iea_total_tj":   round(iea_total_tj,   2),
+                "target_share":   round(target_share,   4),
+                "current_share":  round(current_share,  4),
+                "scale":          round(scale,           4),
+                "status":         "ok",
+            })
+
+        if not variable_scales:
+            # Nothing to adjust — return input unchanged
+            return df_in.copy(), log
+
+        # De-duplicate specs by column (first occurrence keeps its simplex metadata)
+        seen: set = set()
+        specs_dedup: List[VariableSpec] = []
+        for s in specs_all:
+            if s.column not in seen:
+                seen.add(s.column)
+                specs_dedup.append(s)
+
+        # ── 3. Apply all simplex perturbations simultaneously ────────────────
+        # apply_perturbations applies Aitchison renormalization per simplex
+        # constraint, using self.simplex_registry to look up which columns
+        # are co-constrained (the authoritative mapping from ModelAttributes,
+        # not an inference from column names). All columns in each group are
+        # renormalized together so they continue to sum to 1. This is
+        # order-independent and gives a clean, constraint-preserving result.
+        df_out_calibrated = apply_perturbations(
+            df_in, specs_dedup, variable_scales,
+            simplex_registry=self.simplex_registry,
+        )
+
+        # ── 4. Post-condition: simplex sums still equal 1 ───────────────────
+        self._verify_simplex_sums(
+            df_out_calibrated,
+            touched_columns = list(variable_scales.keys()),
+            log             = log,
+            version         = "v1",
+        )
+
+        return df_out_calibrated, log
+
+    # ------------------------------------------------------------------
+    #   Shared post-condition: simplex sums still equal 1
+    # ------------------------------------------------------------------
+
+    def _verify_simplex_sums(
+        self,
+        df: pd.DataFrame,
+        touched_columns: List[str],
+        log: List[dict],
+        version: str,
+    ) -> None:
+        """Check sum-to-1 for every simplex group touched by Phase 2.
+
+        Findings are written to `log` (one entry per non-ok group plus a
+        single summary record). Severity bands:
+
+            "ok"          : numerical noise, no log entry written
+            "warn"        : small drift, warnings.warn at low alarm
+            "strong_warn" : notable drift, warnings.warn at higher alarm
+            "severe"      : corruption -> raises RuntimeError
+
+        We never silently continue past a "severe" violation: it means
+        Aitchison renormalisation (v1) or the QP equality constraint (v2)
+        is not actually being enforced, so the downstream model run would
+        be operating on a corrupted simplex and any IEA comparison
+        afterwards would be meaningless.
+        """
+        findings = self.simplex_registry.check_sums(
+            df, columns_subset=touched_columns,
+        )
+
+        severe = [r for r in findings if r["severity"] == "severe"]
+        strong = [r for r in findings if r["severity"] == "strong_warn"]
+        warn   = [r for r in findings if r["severity"] == "warn"]
+
+        # Per-group log entries for anything non-ok
+        for r in severe + strong + warn:
+            log.append({
+                "phase":             2,
+                "version":           version,
+                "status":            f"simplex_check_{r['severity']}",
+                "group_id":          r["group_id"],
+                "n_columns":         r["n_columns"],
+                "max_abs_dev":       round(r["max_abs_dev"], 8),
+                "time_period_worst": r["time_period_worst"],
+            })
+
+        # Summary log entry
+        log.append({
+            "phase":               2,
+            "version":             version,
+            "status":              "simplex_check_summary",
+            "n_groups_checked":    len(findings),
+            "n_warn":              len(warn),
+            "n_strong_warn":       len(strong),
+            "n_severe":            len(severe),
+        })
+
+        # User-visible warnings for soft violations
+        for r in warn:
+            warnings.warn(
+                f"Phase 2 ({version}): simplex group {r['group_id']} sum-to-1 "
+                f"drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']}. Small but worth noting."
+            )
+        for r in strong:
+            warnings.warn(
+                f"Phase 2 ({version}): simplex group {r['group_id']} sum-to-1 "
+                f"NOTABLE drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']} (n_cols={r['n_columns']}). "
+                "Check that all simplex members are present in df_in and that "
+                "no upstream step dropped or aliased columns."
+            )
+
+        # Hard failure on severe corruption
+        if severe:
+            worst = severe[0]  # findings sorted by max_abs_dev desc
+            raise RuntimeError(
+                f"Phase 2 ({version}): simplex constraint corruption detected. "
+                f"{len(severe)} group(s) violate sum-to-1 by more than 1%. "
+                f"Worst: group_id={worst['group_id']}, "
+                f"|sum-1|={worst['max_abs_dev']:.4f} at time_period="
+                f"{worst['time_period_worst']} (n_cols={worst['n_columns']}, "
+                f"n_missing={worst['n_cols_missing']}). "
+                "The calibrated DataFrame would be unsafe for further model "
+                "runs. Inspect the log entries with status='simplex_check_*' "
+                "for the full list."
+            )
+
+    # ------------------------------------------------------------------
+    #   Pre-condition: input simplex sums equal 1
+    # ------------------------------------------------------------------
+
+    def _verify_input_simplex_sums(
+        self,
+        df_in: pd.DataFrame,
+        full_log: List[dict],
+        simplex_mode: str = "full_simplex",
+        enforce_varspec_bounds: bool = False,
+    ) -> None:
+        """Sanity-check that the raw input dataframe already satisfies sum-to-1.
+
+        Runs BEFORE any calibration phase touches `df_in`. Catches the case
+        where the underlying SISEPUEDE input CSV violates a simplex group
+        defined in `ModelAttributes` — e.g. the SCOE category split where
+        each category's heat fractions sum to 0.5 instead of 1. Without this
+        pre-check the violation only surfaces as an obscure QP infeasibility
+        when `enforce_varspec_bounds=True`, and is silently masked by
+        renormalisation otherwise.
+
+        Same severity bands as `_verify_simplex_sums`; the messages are
+        worded for an *input-data* failure (fix the CSV) rather than a
+        calibration corruption (fix the code).
+        """
+        findings = self.simplex_registry.check_sums(df_in)
+
+        severe = [r for r in findings if r["severity"] == "severe"]
+        strong = [r for r in findings if r["severity"] == "strong_warn"]
+        warn   = [r for r in findings if r["severity"] == "warn"]
+
+        for r in severe + strong + warn:
+            full_log.append({
+                "phase":             0,
+                "status":            f"input_simplex_check_{r['severity']}",
+                "group_id":          r["group_id"],
+                "n_columns":         r["n_columns"],
+                "max_abs_dev":       round(r["max_abs_dev"], 8),
+                "time_period_worst": r["time_period_worst"],
+            })
+        full_log.append({
+            "phase":            0,
+            "status":           "input_simplex_check_summary",
+            "n_groups_checked": len(findings),
+            "n_warn":           len(warn),
+            "n_strong_warn":    len(strong),
+            "n_severe":         len(severe),
+        })
+
+        for r in warn:
+            warnings.warn(
+                f"Input data: simplex group {r['group_id']} sum-to-1 drift "
+                f"max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']}. Small but worth noting."
+            )
+        for r in strong:
+            warnings.warn(
+                f"Input data: simplex group {r['group_id']} sum-to-1 NOTABLE "
+                f"drift max |dev|={r['max_abs_dev']:.2e} at time_period="
+                f"{r['time_period_worst']} (n_cols={r['n_columns']}). "
+                "The input CSV may have an inconsistency in this simplex."
+            )
+
+        if severe:
+            offenders = [
+                {
+                    "group_id":   r["group_id"],
+                    "n_columns":  r["n_columns"],
+                    "max_abs_dev": round(r["max_abs_dev"], 6),
+                    "columns":    self.simplex_registry.columns_in_group(r["group_id"]),
+                }
+                for r in severe
+            ]
+            details = "\n".join(
+                f"  - group_id={o['group_id']}  |sum-1|={o['max_abs_dev']}  "
+                f"n_cols={o['n_columns']}\n      columns={o['columns']}"
+                for o in offenders
+            )
+
+            should_halt = (enforce_varspec_bounds
+                           and simplex_mode == "full_simplex")
+
+            if should_halt:
+                # Bounds=on + full_simplex + bad input is structurally
+                # infeasible. Halt with a clear message before the QP runs.
+                raise RuntimeError(
+                    f"Input data violates the simplex sum-to-1 constraint "
+                    f"for {len(severe)} group(s), and the calibration is "
+                    "configured with --enforce-varspec-bounds and "
+                    "--simplex-mode full_simplex. This combination is "
+                    "structurally infeasible: the QP would enforce sum=1 "
+                    "over a simplex whose default already sums to less than "
+                    "1, and the multiplicative bounds (e.g. [0.8, 1.2]) "
+                    "cannot stretch the fractions far enough to close the "
+                    "gap. Either (a) fix the underlying SISEPUEDE input "
+                    "file for these groups, (b) drop --enforce-varspec-bounds "
+                    "(the QP will renormalise the violation internally), or "
+                    "(c) rerun with --simplex-mode partial_sum (the bound "
+                    f"constraint then becomes trivially feasible):\n{details}"
+                    "\n\nInspect the log entries with "
+                    "status='input_simplex_check_*' for the full list."
+                )
+            else:
+                # All other (bounds, simplex_mode) combinations let
+                # calibration proceed. Print to stderr directly *and* emit a
+                # warning, so the message is visible regardless of how the
+                # caller has configured Python's warning filters.
+                msg = (
+                    f"Input data violates the simplex sum-to-1 constraint "
+                    f"for {len(severe)} group(s). The underlying SISEPUEDE "
+                    "input file is wrong for these groups and should be "
+                    f"fixed for downstream correctness:\n{details}\n\n"
+                    "Calibration will proceed because the current "
+                    f"configuration (enforce_varspec_bounds="
+                    f"{enforce_varspec_bounds}, simplex_mode="
+                    f"{simplex_mode!r}) is not structurally infeasible, but "
+                    "the result will be built on top of imperfect input. "
+                    "Inspect the log entries with "
+                    "status='input_simplex_check_*' for the full list."
+                )
+                print(f"\nWARNING: {msg}\n", file=sys.stderr, flush=True)
+                warnings.warn(msg)
+
+    # ------------------------------------------------------------------
+    #   Phase 2 (v2) — fuel mix via Quadratic Program
+    # ------------------------------------------------------------------
+
+    def _phase2_fuel_mix_qp(
+        self,
+        df_in: pd.DataFrame,
+        plan: CalibrationPlan,
+        time_period: int,
+        gamma: float,
+        enforce_varspec_bounds: bool = False,
+        simplex_mode: str = "full_simplex",
+    ) -> Tuple[pd.DataFrame, List[dict]]:
+        """v2 Phase 2: solve a single QP for all simplex fractions at once.
+
+        Replaces the v1 per-fraction direct ratio with the regularised QP.
+        One model run is used to measure current sector and subsector totals,
+        then qp_phase2 builds A, b, f_default, sector_indices, solves, and
+        writes the solution back via Aitchison renormalisation.
+
+        When `enforce_varspec_bounds` is True, the QP additionally constrains
+        each fraction to ``[lb * f_default, ub * f_default]`` using the
+        VariableSpec bounds attached to each frac column (the same bounds
+        LHS uses). Default False keeps the v2-as-planned behaviour with
+        gamma as the only parameter restraining movement.
+        """
+        log: List[dict] = []
+
+        # 1. One model run to measure current outputs ─────────────────────
+        print("    Running model (Phase 2 baseline, QP)...", end=" ", flush=True)
+        df_out = self._run_model(df_in)
+        print("done")
+
+        # 2. Build QP inputs ──────────────────────────────────────────────
+        qp = build_qp_inputs(
+            plan             = plan,
+            df_in            = df_in,
+            df_out           = df_out,
+            time_period      = time_period,
+            crosswalk        = self.crosswalk,
+            iea_tj           = self._iea_tj,
+            simplex_registry = self.simplex_registry,
+            simplex_mode     = simplex_mode,
+        )
+        log.extend(qp["skipped"])
+
+        if len(qp["columns"]) == 0:
+            warnings.warn(
+                "Phase 2 QP — no eligible simplex groups found; nothing to do."
+            )
+            return df_in.copy(), log
+
+        # 3. Solve ────────────────────────────────────────────────────────
+        bounds_msg = " +varspec bounds" if enforce_varspec_bounds else ""
+        print(
+            f"    Solving QP: m={qp['A'].shape[0]} targets, "
+            f"n={qp['A'].shape[1]} fracs, "
+            f"{len(qp['sector_indices'])} simplex groups, "
+            f"gamma={gamma}{bounds_msg}, simplex_mode={simplex_mode}..."
+        )
+        f_solved = solve_phase2_qp(
+            A                      = qp["A"],
+            b                      = qp["b"],
+            f_default              = qp["f_default"],
+            sector_indices         = qp["sector_indices"],
+            gamma                  = gamma,
+            enforce_varspec_bounds = enforce_varspec_bounds,
+            lb_per_col             = qp["lb_per_col"],
+            ub_per_col             = qp["ub_per_col"],
+            columns                = qp["columns"],
+            sector_group_ids       = qp["sector_group_ids"],
+            missing_per_group      = qp["missing_per_group"],
+            simplex_mode           = simplex_mode,
+        )
+
+        # 4. Diagnostics: predicted residual at the solution ──────────────
+        residual_pre  = float(np.linalg.norm(qp["A"] @ qp["f_default"] - qp["b"]))
+        residual_post = float(np.linalg.norm(qp["A"] @ f_solved        - qp["b"]))
+        log.append({
+            "phase":                  2,
+            "status":                 "qp_solved",
+            "n_targets":              int(qp["A"].shape[0]),
+            "n_fracs":                int(qp["A"].shape[1]),
+            "gamma":                  gamma,
+            "enforce_varspec_bounds": enforce_varspec_bounds,
+            "residual_pre":           round(residual_pre, 6),
+            "residual_post":          round(residual_post, 6),
+        })
+
+        # 5. Apply solution to df_in ──────────────────────────────────────
+        df_calibrated, apply_log = apply_qp_solution(
+            df_in            = df_in,
+            columns          = qp["columns"],
+            f_solved         = f_solved,
+            f_default        = qp["f_default"],
+            plan             = plan,
+            simplex_registry = self.simplex_registry,
+        )
+        log.extend(apply_log)
+
+        # 6. Post-condition: simplex sums still equal 1 ───────────────────
+        self._verify_simplex_sums(
+            df_calibrated,
+            touched_columns = qp["columns"],
+            log             = log,
+            version         = "v2",
+        )
+
+        return df_calibrated, log
+
+    # ------------------------------------------------------------------
+    #   Public calibration API
+    # ------------------------------------------------------------------
+
+    def calibrate(
+        self,
+        df_in: pd.DataFrame,
+        plan: CalibrationPlan,
+        option: int = 0,
+        n_iter: int = 2,
+        gamma: float = 100.0,
+        enforce_varspec_bounds: bool = False,
+        simplex_mode: str = "full_simplex",
+    ) -> Tuple[pd.DataFrame, List[dict]]:
+        """Run n_iter rounds of Phase 1 (sector totals) + Phase 2 (fuel mix).
+
+        Parameters
+        ----------
+        df_in : pd.DataFrame
+            Baseline SISEPUEDE input DataFrame for one country.
+            Must have a 'year' column mapping time_period to calendar year.
+        plan : CalibrationPlan
+            Output of build_energy_calibration_plan(model_attributes).
+        option : int
+            - 0 runs v1 Phase 1 + v1 Phase 2 (direct ratio)
+            - 1 runs Phase 1 only (v1)
+            - 2 runs Phase 2 only (v1 direct ratio)
+            - 3 runs v2: Phase 1 (unchanged) + Phase 2 QP (regularised)
+            - 4 runs Phase 2 QP only (v2)
+        gamma : float
+            Regularisation weight for the v2 Phase 2 QP. Higher = stay
+            closer to the model defaults; lower = follow IEA more
+            aggressively. Ignored unleass option in (3, 4). Default 100.0.
+        enforce_varspec_bounds : bool
+            When True, the v2 Phase 2 QP additionally constrains each
+            fraction to ``[lb * f_default, ub * f_default]`` using the
+            VariableSpec bounds attached to each frac column. The same
+            bounds LHS uses, so calibration and sensitivity stay coherent.
+            Hard bounds may make the QP infeasible if IEA demands a move
+            larger than the bound allows -- the solver raises with a
+            message pointing at gamma / lb / ub. Default False.
+            Ignored unless option in (3, 4).
+        n_iter : int
+            Number of full Phase 1 + Phase 2 iterations. Default 2.
+            - 1 iteration is usually sufficient for sector totals (Phase 1).
+            - 2 iterations closes residual fuel-mix / total coupling.
+            - 3+ iterations offer diminishing returns.
+
+        Returns
+        -------
+        df_calibrated : pd.DataFrame
+            Input DataFrame with adjusted parameter values.
+        log : List[dict]
+            Per-iteration, per-group record of scale factors and status codes.
+            Status codes:
+              "ok"                         — applied successfully
+              "skipped_simplex_group"      — Phase 1 skipped a group whose knobs
+                                             are simplex-constrained (handled in
+                                             Phase 2)
+              "skipped_no_iea"             — IEA value missing for this target/year
+              "skipped_no_ssp_fields"      — crosswalk has no mapping for this pair
+              "skipped_zero_current"       — model output was 0 (can't compute ratio)
+              "skipped_zero_current_share" — fuel absent in model, can't scale from 0
+              "skipped_no_iea_total"       — sector total missing from IEA data
+        """
+        time_period = self._get_time_period(df_in)
+        df          = df_in.copy()
+        full_log:   List[dict] = []
+
+        # Pre-condition: the raw input must already satisfy every simplex's
+        # sum-to-1. If it doesn't, Phase 2's QP would either declare
+        # infeasibility (with bounds on) or silently mask the violation by
+        # renormalisation (with bounds off). Fail fast with a clear, input-
+        # data-focused error instead.
+        self._verify_input_simplex_sums(
+            df_in,
+            full_log,
+            simplex_mode=simplex_mode,
+            enforce_varspec_bounds=enforce_varspec_bounds,
+        )
+
+        for it in range(n_iter):
+            print(f"\n=== Calibration iteration {it + 1}/{n_iter} ===")
+
+            if option == 0:
+                print("  Phase 1 — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
+
+                print("  Phase 2 — fuel mix (frac_* simplex groups):")
+                df, log2 = self._phase2_fuel_mix(df, plan, time_period)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                    "phase2":    log2,
+                })
+            elif option == 1:
+                print("  Phase 1 only — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                })
+            elif option == 2:
+                print("  Phase 2 only — fuel mix (frac_* simplex groups):")
+                df, log2 = self._phase2_fuel_mix(df, plan, time_period)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase2":    log2,
+                })
+            elif option == 3:
+                print("  Phase 1 — sector totals (consumpinit_*, scalar_*, efficiencies):")
+                df, log1 = self._phase1_totals(df, plan, time_period)
+                ok1    = sum(1 for r in log1 if r.get("status") == "ok")
+                skip1  = sum(1 for r in log1 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok1}  skipped={skip1}")
+
+                print("  Phase 2 (v2) — fuel mix via QP:")
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds, simplex_mode)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase1":    log1,
+                    "phase2":    log2,
+                })
+            elif option == 4:
+                print("  Phase 2 (v2) only — fuel mix via QP:")
+                df, log2 = self._phase2_fuel_mix_qp(df, plan, time_period, gamma, enforce_varspec_bounds, simplex_mode)
+                ok2    = sum(1 for r in log2 if r.get("status") == "ok")
+                skip2  = sum(1 for r in log2 if r.get("status", "").startswith("skipped"))
+                print(f"    applied={ok2}  skipped={skip2}")
+                full_log.append({
+                    "iteration": it + 1,
+                    "phase2":    log2,
+                })
+            else:
+                warnings.warn(
+                    f"Calibration option {option} must be in 0..4. "
+                    "Returning same input DataFrame, and empty log."
+                )
+                continue
+                
+
+        return df, full_log
+
+    # ------------------------------------------------------------------
+    #   Diagnostics
+    # ------------------------------------------------------------------
+
+    def evaluate(
+        self,
+        df_in: pd.DataFrame,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Run the model on df_in and return the IEA comparison table.
+
+        Use this to measure calibration error before and after calling
+        calibrate(). The returned DataFrame is the output of
+        IEACrosswalk.build_comparison() and can be passed directly to
+        IEACrosswalk.summary() for a compact view.
+
+        Parameters
+        ----------
+        df_in : pd.DataFrame
+            Input DataFrame (baseline or calibrated). Must have a 'year' column.
+        year_min, year_max : int | None
+            Restrict comparison to this year range. Defaults to year_target
+            on both ends if not specified (single-year comparison).
+
+        Returns
+        -------
+        pd.DataFrame
+            Output of IEACrosswalk.build_comparison(). Key columns:
+            iea_balance_code, iea_product_code, year,
+            value_iea_tj, value_sisepuede_tj,
+            ratio, rel_err.
+        """
+        year_min = year_min or self.year_target
+        year_max = year_max or self.year_target
+
+        df_out  = self._run_model(df_in)
+
+        # Attach year column (IEACrosswalk.aggregate_sisepuede needs it)
+        df_out = attach_year_column(df_out, df_in)
+
+        df_ssp  = self.crosswalk.aggregate_sisepuede(df_out)
+        return self.crosswalk.build_comparison(
+            df_ssp,
+            self.df_iea_long,
+            year_min=year_min,
+            year_max=year_max,
+        )
+
+    def log_summary(self, log: List[dict]) -> pd.DataFrame:
+        """Convert the calibration log to a flat DataFrame for inspection.
+
+        Parameters
+        ----------
+        log : List[dict]
+            The second return value of calibrate().
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per (iteration, group). Columns include iteration, phase,
+            group name, status, scalar/scale applied, and target IEA pair.
+        """
+        rows = []
+        for entry in log:
+            # Pre-iteration entries (e.g. status='input_simplex_check_*'
+            # appended by _verify_input_simplex_sums) are flat dicts with no
+            # 'iteration' / 'phase1' / 'phase2' keys. Skip them here; the
+            # raw log still contains them for callers who want to inspect.
+            if "iteration" not in entry:
+                continue
+            it = entry["iteration"]
+            phases = [(k, entry[k]) for k in ("phase1", "phase2") if k in entry]
+            for phase_key, phase_log in phases:
+                for rec in phase_log:
+                    rows.append({
+                        "iteration": it,
+                        "phase":     rec.get("phase", phase_key),
+                        "group":     rec.get("group", ""),
+                        "status":    rec.get("status", ""),
+                        "target":    str(rec.get("target", "")),
+                        "scalar":    rec.get("scalar",  rec.get("scale", float("nan"))),
+                        "current":   rec.get("current_ssp", rec.get("current_share", float("nan"))),
+                        "target_val":rec.get("target_ssp",  rec.get("target_share",  float("nan"))),
+                    })
+
+        return pd.DataFrame(rows)
+
+
+    def summarize_knobs(
+        self,
+        df_baseline: pd.DataFrame,
+        df_calibrated: pd.DataFrame,
+        plan: CalibrationPlan,
+    ) -> pd.DataFrame:
+        """Long-form record of how each calibration knob changed.
+
+        Walks the plan and, for every (group, variable), records the variable's
+        value in df_baseline vs df_calibrated at the time_period that maps to
+        year_target. Phase-1 changes come out as the scalar applied to scalar-
+        group inputs; phase-2 changes come out as the post-Aitchison effective
+        change to each frac_*. Both compose correctly across n_iter.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per (group, variable). Columns:
+            phase, group_name, iea_balance, iea_product, variable,
+            simplex_group_id, initial, final, pct_change.
+        """
+        time_period = self._get_time_period(df_baseline)
+
+        def _val(df: pd.DataFrame, col: str) -> float:
+            sub = df.loc[df["time_period"] == time_period, col]
+            if sub.empty:
+                return float("nan")
+            return float(sub.iloc[0])
+
+        rows: List[dict] = []
+        for group in plan:
+            if not group.iea_targets:
+                continue
+
+            if group.is_simplex:
+                phase = 2
+            else:
+                if self._is_simplex_constrained_group(group):
+                    continue
+                phase = 1
+
+            bal, prod = group.iea_targets[0]
+
+            for col in group.columns:
+                if col not in df_baseline.columns or col not in df_calibrated.columns:
+                    continue
+
+                initial = _val(df_baseline, col)
+                final   = _val(df_calibrated, col)
+                if initial == 0.0 or not np.isfinite(initial):
+                    pct = float("nan")
+                else:
+                    pct = 100.0 * (final - initial) / initial
+
+                rows.append({
+                    "phase":            phase,
+                    "group_name":       group.name,
+                    "iea_balance":      bal,
+                    "iea_product":      prod,
+                    "variable":         col,
+                    "simplex_group_id": self.simplex_registry.group_id(col),
+                    "initial":          initial,
+                    "final":            final,
+                    "pct_change":       pct,
+                })
+
+        return pd.DataFrame(rows)

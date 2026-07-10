@@ -248,12 +248,3 @@ def plot_stack(
     
     return fig, ax
     
-           
-
-        
-
-
-
-
-
-

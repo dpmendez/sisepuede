@@ -369,12 +369,15 @@ class EnergyConsumption:
         self.required_variables = list(set(self.required_variables))
         self.required_variables.sort()
 
-        # return variables required for secondary integrtion (i.e., for fugitive emissions only)
+        # return variables required for secondary integration (i.e., for fugitive emissions only)
         list_vars_required_for_integration_fgtv = [
             self.modvar_enfu_energy_demand_by_fuel_ccsq,
             self.modvar_enfu_energy_demand_by_fuel_entc,
             self.modvar_enfu_energy_demand_by_fuel_inen,
             self.modvar_enfu_energy_demand_by_fuel_scoe,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_residential,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_commercial_and_public,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_other,
             self.modvar_enfu_energy_demand_by_fuel_trns,
             self.modvar_enfu_energy_demand_by_fuel_total,
             self.modvar_enfu_exports_fuel_adjusted,
@@ -580,6 +583,9 @@ class EnergyConsumption:
         self.modvar_enfu_energy_demand_by_fuel_entc = "Energy Demand by Fuel in Energy Technology"
         self.modvar_enfu_energy_demand_by_fuel_inen = "Energy Demand by Fuel in Industrial Energy"
         self.modvar_enfu_energy_demand_by_fuel_scoe = "Energy Demand by Fuel in SCOE"
+        self.modvar_enfu_energy_demand_by_fuel_scoe_residential = "Energy Demand by Fuel in SCOE Residential"
+        self.modvar_enfu_energy_demand_by_fuel_scoe_commercial_and_public = "Energy Demand by Fuel in SCOE Commercial and Public"
+        self.modvar_enfu_energy_demand_by_fuel_scoe_other = "Energy Demand by Fuel in SCOE Other"
         self.modvar_enfu_energy_demand_by_fuel_total = "Total Energy Demand by Fuel"
         self.modvar_enfu_energy_demand_by_fuel_trns = "Energy Demand by Fuel in Transportation"
         self.modvar_enfu_energy_density_gravimetric = "Gravimetric Energy Density"
@@ -611,12 +617,17 @@ class EnergyConsumption:
             self.modvar_enfu_energy_demand_by_fuel_entc,
             self.modvar_enfu_energy_demand_by_fuel_inen,
             self.modvar_enfu_energy_demand_by_fuel_scoe,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_residential,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_commercial_and_public,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_other,
             self.modvar_enfu_energy_demand_by_fuel_trns
         ]
         # total demand for fuels for estimating distribution
         self.modvars_enfu_energy_demands_distribution = [
             self.modvar_enfu_energy_demand_by_fuel_entc,
-            self.modvar_enfu_energy_demand_by_fuel_scoe
+            self.modvar_enfu_energy_demand_by_fuel_scoe,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_residential,
+            self.modvar_enfu_energy_demand_by_fuel_scoe_commercial_and_public
         ]
 
         # key categories
@@ -3482,7 +3493,9 @@ class EnergyConsumption:
         # attribute tables
         attr_enfu = self.model_attributes.get_attribute_table(self.subsec_name_enfu)
         attr_scoe = self.model_attributes.get_attribute_table(self.subsec_name_scoe)
-
+        idx_scoe_res = attr_scoe.get_key_value_index("residential")
+        idx_scoe_com = attr_scoe.get_key_value_index("commercial_municipal")
+        idx_scoe_other = attr_scoe.get_key_value_index("other_se")
 
         ##  OUTPUT INITIALIZATION
 
@@ -3684,6 +3697,9 @@ class EnergyConsumption:
 
         # initialize electrical demand to pass and output emission arrays
         arr_scoe_demand_by_fuel = np.zeros((n_projection_time_periods, len(attr_enfu.key_values)))
+        arr_scoe_demand_by_fuel_res = np.zeros_like(arr_scoe_demand_by_fuel)
+        arr_scoe_demand_by_fuel_com = np.zeros_like(arr_scoe_demand_by_fuel)
+        arr_scoe_demand_by_fuel_other = np.zeros_like(arr_scoe_demand_by_fuel)
         arr_scoe_demand_electricity = arr_scoe_demand_hh_elec + arr_scoe_demand_mmmgdp_elec
         arr_scoe_demand_electricity *= arr_scoe_demscalar_elec_energy_demand
         arr_scoe_demand_non_electric = 0.0
@@ -3706,6 +3722,9 @@ class EnergyConsumption:
             # get the demand for the current fuel
             arr_scoe_endem_cur_fuel = dict_demands_by_fuel_heat.get(var_ener_frac)
             arr_scoe_demand_by_fuel[:, index_cat_fuel] = np.sum(arr_scoe_endem_cur_fuel, axis = 1)*scalar_scoe_to_enfu_var_units
+            arr_scoe_demand_by_fuel_res[:, index_cat_fuel] = arr_scoe_endem_cur_fuel[:, idx_scoe_res] * scalar_scoe_to_enfu_var_units
+            arr_scoe_demand_by_fuel_com[:, index_cat_fuel] = arr_scoe_endem_cur_fuel[:, idx_scoe_com] * scalar_scoe_to_enfu_var_units
+            arr_scoe_demand_by_fuel_other[:, index_cat_fuel] = arr_scoe_endem_cur_fuel[:, idx_scoe_other] * scalar_scoe_to_enfu_var_units
 
             # apply emission factors
             arr_scoe_emissions_ch4 += arr_scoe_endem_cur_fuel.transpose()*arr_scoe_ef_by_fuel_ch4[:, index_cat_fuel]
@@ -3721,6 +3740,9 @@ class EnergyConsumption:
             # add electricity demand and total energy demand
             if (cat_fuel == self.cat_enfu_electricity):
                 arr_scoe_demand_by_fuel[:, index_cat_fuel] += np.sum(arr_scoe_demand_electricity, axis = 1)*scalar_scoe_to_enfu_var_units
+                arr_scoe_demand_by_fuel_res[:, index_cat_fuel] += arr_scoe_demand_electricity[:, idx_scoe_res] * scalar_scoe_to_enfu_var_units
+                arr_scoe_demand_by_fuel_com[:, index_cat_fuel] += arr_scoe_demand_electricity[:, idx_scoe_com] * scalar_scoe_to_enfu_var_units
+                arr_scoe_demand_by_fuel_other[:, index_cat_fuel] += arr_scoe_demand_electricity[:, idx_scoe_other] * scalar_scoe_to_enfu_var_units
                 arr_scoe_demand_electricity += arr_scoe_endem_cur_fuel
             else:
                 arr_scoe_demand_non_electric += arr_scoe_endem_cur_fuel
@@ -3773,6 +3795,21 @@ class EnergyConsumption:
             self.model_attributes.array_to_df(
                 arr_scoe_demand_by_fuel, 
                 self.modvar_enfu_energy_demand_by_fuel_scoe, 
+                reduce_from_all_cats_to_specified_cats = True
+            ),
+            self.model_attributes.array_to_df(
+                arr_scoe_demand_by_fuel_res, 
+                self.modvar_enfu_energy_demand_by_fuel_scoe_residential, 
+                reduce_from_all_cats_to_specified_cats = True
+            ),
+            self.model_attributes.array_to_df(
+                arr_scoe_demand_by_fuel_com, 
+                self.modvar_enfu_energy_demand_by_fuel_scoe_commercial_and_public, 
+                reduce_from_all_cats_to_specified_cats = True
+            ),
+            self.model_attributes.array_to_df(
+                arr_scoe_demand_by_fuel_other, 
+                self.modvar_enfu_energy_demand_by_fuel_scoe_other, 
                 reduce_from_all_cats_to_specified_cats = True
             ),
             # FUEL VALUE
@@ -4092,7 +4129,7 @@ class EnergyConsumption:
             df_neenergy_trajectories,
             self.modvars_trns_list_fuel_fraction,
             1,
-            force_sum_equality = False,
+            force_sum_equality = True,
             msg_append = "Energy fractions by category do not sum to 1. See definition of dict_arrs_trns_frac_fuel.",
         )
 
