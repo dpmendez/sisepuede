@@ -17,7 +17,7 @@ What this module provides:
 
 This module is pure ML — no SISEPUEDE imports, no model runs. The ML
 lifecycle stages (train / evaluate / gate) are separable, callable
-independently from the v3_train_surrogate CLI. There is no `fit()`
+independently from the train_surrogate CLI. There is no `fit()`
 convenience wrapper; callers must compose the primitives explicitly.
 """
 
