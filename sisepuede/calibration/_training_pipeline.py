@@ -304,12 +304,17 @@ def _empty_report(surrogate: Surrogate) -> SurrogateReport:
 
 
 def _serialize_report(report: SurrogateReport) -> Dict[str, Any]:
-    """SurrogateReport -> JSON-safe dict for metadata.json."""
+    """SurrogateReport -> JSON-safe dict for metadata.json.
+
+    v3 surrogate targets are raw SSP column *names* (strings), stored as
+    strings. Older / hybrid usage where targets are (balance, product)
+    tuples gets serialised as 2-element lists.
+    """
     return {
         "n_train":          int(report.n_train),
         "n_holdout":        int(report.n_holdout),
-        "accepted_targets": [list(t) for t in report.accepted_targets],
-        "rejected_targets": [list(t) for t in report.rejected_targets],
+        "accepted_targets": [_serialize_target(t) for t in report.accepted_targets],
+        "rejected_targets": [_serialize_target(t) for t in report.rejected_targets],
         "r2_per_target":    {
             _stringify_target(t): _safe_json_float(v)
             for t, v in report.r2_per_target.items()
@@ -321,8 +326,22 @@ def _serialize_report(report: SurrogateReport) -> Dict[str, Any]:
     }
 
 
+def _serialize_target(t: Any) -> Any:
+    """JSON-safe representation of a surrogate target.
+
+    Tuples (from the older IEA-cell-target design) become 2-element
+    lists. Strings (v3's raw per-tech SSP columns) stay strings.
+    """
+    if isinstance(t, tuple):
+        return list(t)
+    return t
+
+
 def _stringify_target(t: Any) -> str:
-    """(balance, product) tuple -> 'balance|product' for JSON keys."""
+    """Compact string form for JSON dict keys.
+
+    Tuples -> 'balance|product'. Strings -> themselves.
+    """
     if isinstance(t, tuple):
         return "|".join(str(x) for x in t)
     return str(t)
