@@ -25,7 +25,7 @@ Outputs (under `--output-dir`):
 
     {output_dir}/{iso3}_{year}[_{tag}]/
         surrogate.joblib   the Surrogate model
-        aggregation.pkl    {'iea_target_rows', 'ssp_columns', 'A_crosswalk'}
+        aggregation.pkl    {'iea_target_rows', 'ssp_columns', 'A'}
         metadata.json      per-target R^2/MAPE (dev + test), gate verdict,
                            training-data provenance, spec + splits
 """

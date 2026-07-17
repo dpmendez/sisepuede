@@ -23,7 +23,7 @@ The output directory has the same shape as generate_surrogate_data's:
 
     {output_dir}/{iso3}_{year}[_{tag}]/
         surrogate.joblib      # the Surrogate model
-        aggregation.pkl       # {'iea_target_rows', 'ssp_columns', 'A_crosswalk'}
+        aggregation.pkl       # {'iea_target_rows', 'ssp_columns', 'A'}
         metadata.json         # per-target R^2/MAPE (dev+test), gate verdict,
                               # training-data provenance, spec + splits
 
@@ -129,7 +129,7 @@ def train_surrogate_from_data(
     -------
     dict
         Keys: `surrogate`, `dev_report`, `test_report`, `iea_target_rows`,
-        `ssp_columns`, `A_crosswalk`, `training_data_dir`, `metadata`,
+        `ssp_columns`, `A`, `training_data_dir`, `metadata`,
         `output_dir` (if persisted).
     """
     t0 = time.time()
@@ -151,7 +151,7 @@ def train_surrogate_from_data(
         print(f"  spec.model_kind = {spec.model_kind}, seed = {spec.seed}")
 
     # ── Resolve crosswalk aggregation ──────────────────────────────────
-    ssp_columns, A_crosswalk = crosswalk_ssp_columns_for_iea_targets(
+    ssp_columns, A = crosswalk_ssp_columns_for_iea_targets(
         iea_target_rows, crosswalk,
     )
     if not ssp_columns:
@@ -241,7 +241,7 @@ def train_surrogate_from_data(
         "test_report":       test_report,
         "iea_target_rows":   iea_target_rows,
         "ssp_columns":       ssp_columns,
-        "A_crosswalk":       A_crosswalk,
+        "A":       A,
         "training_data_dir": training_data_dir,
         "metadata":          metadata,
     }
@@ -250,7 +250,7 @@ def train_surrogate_from_data(
             output_dir, td_meta["iso_country"], target_year, tag,
         )
         _persist_artifacts(
-            subdir, surrogate, iea_target_rows, ssp_columns, A_crosswalk,
+            subdir, surrogate, iea_target_rows, ssp_columns, A,
             metadata, verbose,
         )
         metadata["output_dir"] = subdir
@@ -269,7 +269,7 @@ def load_surrogate_bundle(
     """Inverse of train_surrogate_from_data's persistence.
 
     Returns dict with keys `surrogate`, `iea_target_rows`, `ssp_columns`,
-    `A_crosswalk`, `metadata`.
+    `A`, `metadata`.
     """
     surrogate  = Surrogate.load(os.path.join(subdir, "surrogate.joblib"))
     agg        = joblib.load(os.path.join(subdir, "aggregation.pkl"))
@@ -279,7 +279,7 @@ def load_surrogate_bundle(
         "surrogate":       surrogate,
         "iea_target_rows": [tuple(t) for t in agg["iea_target_rows"]],
         "ssp_columns":     list(agg["ssp_columns"]),
-        "A_crosswalk":     np.asarray(agg["A_crosswalk"]),
+        "A":     np.asarray(agg["A"]),
         "metadata":        metadata,
     }
 
@@ -389,7 +389,7 @@ def _persist_artifacts(
     surrogate:       Surrogate,
     iea_target_rows: List[Tuple[str, str]],
     ssp_columns:     List[str],
-    A_crosswalk:     np.ndarray,
+    A:     np.ndarray,
     metadata:        Dict[str, Any],
     verbose:         bool,
 ) -> None:
@@ -403,7 +403,7 @@ def _persist_artifacts(
         {
             "iea_target_rows": iea_target_rows,
             "ssp_columns":     ssp_columns,
-            "A_crosswalk":     A_crosswalk,
+            "A":     A,
         },
         agg_path,
     )
