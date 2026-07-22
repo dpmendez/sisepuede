@@ -402,6 +402,12 @@ def energy_calibration(
     enforce_varspec_bounds: bool = False,
     simplex_mode:           str = "full_simplex",
     verbose:                bool = True,
+    surrogate_dir:          Optional[str] = None,
+    v3_gamma:               float = 1.0,
+    v3_trust_radius:        float = 0.05,
+    v3_max_iter:            int   = 10,
+    v3_verify:              bool  = True,
+    v3_force_fp_mismatch:   bool  = False,
 ) -> dict:
     """Run the full energy calibration pipeline and persist all artefacts.
 
@@ -495,24 +501,70 @@ def energy_calibration(
     )
 
     # ── 5. Run calibration ──────────────────────────────────────────────────
-    calibrator = Calibrator(
-        models                    = model_energycon,
-        crosswalk                 = xw,
-        df_iea_long               = df_iea_raw,
-        year_target               = target_year,
-        include_energy_production = False,
-    )
+    if cal_option == 5:
+        # v3 inference: v2 phases + surrogate-driven production phase.
+        if surrogate_dir is None:
+            raise ValueError(
+                "cal_option=5 requires --surrogate PATH pointing at a "
+                "surrogate bundle directory produced by train_surrogate.py."
+            )
+        from sisepuede.calibration._training_pipeline import load_surrogate_bundle
+        from sisepuede.calibration.calibrator_v3      import CalibratorV3
+        from sisepuede.manager.sisepuede_models       import SISEPUEDEModels
 
-    df_calibrated, log = calibrator.calibrate(
-        df_in                  = df_input_energy,
-        plan                   = plan,
-        n_iter                 = num_iterations,
-        option                 = cal_option,
-        gamma                  = gamma,
-        enforce_varspec_bounds = enforce_varspec_bounds,
-        simplex_mode           = simplex_mode,
-    )
-    df_log = calibrator.log_summary(log)
+        _vprint(verbose, f"Loading surrogate bundle from {surrogate_dir}")
+        surrogate_bundle = load_surrogate_bundle(surrogate_dir)
+
+        # v3 needs SISEPUEDEModels (with NemoMod) for the verification run.
+        models_full = SISEPUEDEModels(
+            model_attributes,
+            allow_electricity_run      = True,
+            fp_julia                   = file_structure.dir_jl,
+            fp_nemomod_reference_files = file_structure.dir_ref_nemo,
+            fp_nemomod_temp_sqlite_db  = file_structure.fp_sqlite_tmp_nemomod_intermediate,
+            initialize_julia           = True,
+        )
+
+        calibrator = CalibratorV3(
+            models                     = models_full,
+            crosswalk                  = xw,
+            df_iea_long                = df_iea_raw,
+            year_target                = target_year,
+            surrogate_bundle           = surrogate_bundle,
+            force_fingerprint_mismatch = v3_force_fp_mismatch,
+        )
+        df_calibrated, log = calibrator.calibrate(
+            df_in         = df_input_energy,
+            plan          = plan,
+            v2_option     = 3,                 # v2 full inside v3
+            v2_n_iter     = num_iterations,
+            v2_gamma      = gamma,
+            gamma         = v3_gamma,
+            trust_radius  = v3_trust_radius,
+            max_iter      = v3_max_iter,
+            verify        = v3_verify,
+            verbose       = verbose,
+        )
+        df_log = calibrator.log_summary(log)
+    else:
+        calibrator = Calibrator(
+            models                    = model_energycon,
+            crosswalk                 = xw,
+            df_iea_long               = df_iea_raw,
+            year_target               = target_year,
+            include_energy_production = False,
+        )
+
+        df_calibrated, log = calibrator.calibrate(
+            df_in                  = df_input_energy,
+            plan                   = plan,
+            n_iter                 = num_iterations,
+            option                 = cal_option,
+            gamma                  = gamma,
+            enforce_varspec_bounds = enforce_varspec_bounds,
+            simplex_mode           = simplex_mode,
+        )
+        df_log = calibrator.log_summary(log)
 
     # ── 6. Post-calibration evaluation ──────────────────────────────────────
     df_out_calibrated  = _run_energy_model(model_energycon, df_calibrated, "calibrated", verbose)

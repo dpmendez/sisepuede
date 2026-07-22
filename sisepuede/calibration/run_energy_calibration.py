@@ -46,8 +46,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Calendar year to calibrate to (default: 2018).")
     p.add_argument("--num-iterations", type=int, default=2,
                    help="Number of Phase 1 + Phase 2 iterations (default: 2).")
-    p.add_argument("--cal-option",     type=int, default=3, choices=[0, 1, 2, 3, 4],
-                   help="Calibration option, 0..4. See Calibrator.calibrate (default: 3).")
+    p.add_argument("--cal-option",     type=int, default=3, choices=[0, 1, 2, 3, 4, 5],
+                   help=(
+                       "Calibration option. 0..4 are v1/v2 (see "
+                       "Calibrator.calibrate). 5 is v3 inference (v2 + "
+                       "surrogate-driven production) and requires --surrogate. "
+                       "Default: 3."
+                   ))
     p.add_argument("--gamma",          type=float, default=100.0,
                    help="QP regularisation weight, used when cal-option in {3,4} (default: 100.0).")
     p.add_argument("--enforce-varspec-bounds", action="store_true",
@@ -76,6 +81,28 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Path to the IEA↔SISEPUEDE crosswalk CSV.")
     p.add_argument("--output-dir",      type=str, default=DEFAULT_OUTPUT_DIR,
                    help="Directory where outputs (plots/, tables/, CSVs) are written.")
+
+    # v3 (cal-option 5) arguments
+    p.add_argument("--surrogate", type=str, default=None,
+                   help=(
+                       "Path to a surrogate bundle directory produced by "
+                       "train_surrogate.py. Required for --cal-option 5."
+                   ))
+    p.add_argument("--v3-gamma", type=float, default=1.0,
+                   help="v3 SQP regularisation weight (default: 1.0).")
+    p.add_argument("--v3-trust-radius", type=float, default=0.05,
+                   help="v3 SQP trust-region radius (default: 0.05).")
+    p.add_argument("--v3-max-iter", type=int, default=10,
+                   help="v3 SQP outer-loop cap (default: 10).")
+    p.add_argument("--no-v3-verify", action="store_true",
+                   help="Skip the verification projection after v3.")
+    p.add_argument("--v3-force-fp-mismatch", action="store_true",
+                   help=(
+                       "Bypass the consumption-fingerprint check. Unsafe -- "
+                       "surrogate predictions will be biased if the current "
+                       "post-v2 state differs from what the surrogate was "
+                       "trained at."
+                   ))
 
     # Output knobs
     p.add_argument("--tag", type=str, default="",
@@ -106,6 +133,13 @@ def main() -> None:
         enforce_varspec_bounds = args.enforce_varspec_bounds,
         simplex_mode           = args.simplex_mode,
         verbose                = not args.quiet,
+        # v3 (cal-option 5) forwards
+        surrogate_dir          = args.surrogate,
+        v3_gamma               = args.v3_gamma,
+        v3_trust_radius        = args.v3_trust_radius,
+        v3_max_iter            = args.v3_max_iter,
+        v3_verify              = not args.no_v3_verify,
+        v3_force_fp_mismatch   = args.v3_force_fp_mismatch,
     )
 
 
