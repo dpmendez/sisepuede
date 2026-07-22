@@ -426,8 +426,8 @@ class Surrogate:
             1e-1] on training data and pick the value that maximises
             gradient-recovery on a synthetic linear probe or that
             minimises Jacobian variance across the training envelope.
-            Fixed 5e-2 is fine for step 8 verification but likely
-            suboptimal for some knob families.
+            Fixed 5e-2 is fine for now but likely suboptimal for some knob
+            families.
 
         Returns
         -------
@@ -561,7 +561,7 @@ def fingerprint_consumption_state(
     input DataFrame.
 
     Used by v3 to tag a Surrogate with the consumption configuration it
-    was trained under. The orchestrator (CalibratorV3) recomputes this
+    was trained under. The orchestrator (ProductionCalibrator) recomputes this
     on the candidate calibrated DataFrame and refuses to apply the
     surrogate when the fingerprints disagree.
 

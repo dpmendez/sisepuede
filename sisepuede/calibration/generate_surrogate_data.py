@@ -24,7 +24,7 @@ Example
 
 The input CSV **should be a post-consumption-calibration (post-v2) input**.
 Passing a raw uncalibrated CSV still works but the surrogate you train will
-be pinned to that raw consumption state, and CalibratorV3 will refuse to
+be pinned to that raw consumption state, and ProductionCalibrator will refuse to
 apply it (fingerprint mismatch) at inference time.
 
 Outputs (under `--output-dir`):

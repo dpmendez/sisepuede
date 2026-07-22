@@ -509,7 +509,7 @@ def energy_calibration(
                 "surrogate bundle directory produced by train_surrogate.py."
             )
         from sisepuede.calibration._training_pipeline import load_surrogate_bundle
-        from sisepuede.calibration.calibrator_v3      import CalibratorV3
+        from sisepuede.calibration.calibrator_production      import ProductionCalibrator
         from sisepuede.manager.sisepuede_models       import SISEPUEDEModels
 
         _vprint(verbose, f"Loading surrogate bundle from {surrogate_dir}")
@@ -525,7 +525,7 @@ def energy_calibration(
             initialize_julia           = True,
         )
 
-        calibrator = CalibratorV3(
+        calibrator = ProductionCalibrator(
             models                     = models_full,
             crosswalk                  = xw,
             df_iea_long                = df_iea_raw,

@@ -49,7 +49,7 @@ Key design choices
 
 - **Envelope guard**. `surrogate.in_envelope(f_next)` is checked every
   iteration; violations are recorded in diagnostics but do NOT halt the
-  loop. The final verification run inside CalibratorV3 catches genuine
+  loop. The final verification run inside ProductionCalibrator catches genuine
   extrapolation failures.
 
 - **Gate-driven row dropping**. Callers may pass `accepted_iea_mask` to

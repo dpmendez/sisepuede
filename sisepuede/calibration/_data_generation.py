@@ -22,7 +22,7 @@ Output layout (when `output_dir` is provided):
 The baseline pickle is what closes the reproducibility loop: given
 (result.pkl, baseline.pkl) alone, any downstream caller can reconstruct the
 absolute SSP input values that produced any single run. The metadata JSON
-is what CalibratorV3 reads at inference time to verify (via
+is what ProductionCalibrator reads at inference time to verify (via
 consumption_fingerprint) that the training-time consumption state matches
 what we're currently calibrating against.
 """
@@ -60,7 +60,7 @@ DEFAULT_KNOB_PREFIX_FILTERS: List[str] = [
     "efficfactor_entc_technology_fuel_use_",
 ]
 
-DEFAULT_KNOB_BOUNDS: Tuple[float, float] = (0.9, 1.1)
+DEFAULT_KNOB_BOUNDS: Tuple[float, float] = (0.8, 1.2)
 
 
 def generate_lhs_training_data(
@@ -92,7 +92,7 @@ def generate_lhs_training_data(
     who pass a pre-v2 raw input will get a working training set but the
     surrogate they train will be pinned to that raw consumption state
     (which won't match a post-v2 calibrator run downstream, tripping the
-    fingerprint check in CalibratorV3).
+    fingerprint check in ProductionCalibrator).
 
     Parameters
     ----------

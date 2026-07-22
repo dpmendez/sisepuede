@@ -27,7 +27,7 @@ The output directory has the same shape as generate_surrogate_data's:
         metadata.json         # per-target R^2/MAPE (dev+test), gate verdict,
                               # training-data provenance, spec + splits
 
-CalibratorV3 loads all three at inference time. The consumption 
+ProductionCalibrator loads all three at inference time. The consumption 
 fingerprint stored in the metadata is what the calibrator checks
 against the current input frame to refuse mismatched surrogates.
 """
