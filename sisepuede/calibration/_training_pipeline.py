@@ -52,6 +52,7 @@ from sisepuede.calibration._surrogate import (
     Surrogate,
     SurrogateReport,
     SurrogateSpec,
+    _default_hyperparams_for,
     apply_accuracy_gate,
 )
 from sisepuede.calibration._training_set import (
@@ -210,7 +211,15 @@ def train_surrogate_from_data(
         "consumption_fingerprint":  consumption_fp,
         "iea_target_rows":          [list(t) for t in iea_target_rows],
         "ssp_columns":              list(ssp_columns),
-        "spec":                     asdict(spec),
+        # Store the every hyperparameter the regressor was actually trained with,
+        # whether it came from the defaults or from a user override.
+        "spec":                     {
+            **asdict(spec),
+            "hyperparams": {
+                **_default_hyperparams_for(spec.model_kind),
+                **spec.hyperparams,
+            },
+        },
         "split_fractions":          list(split_fractions),
         "split_seed":               int(split_seed),
         "n_train":                  int(X_tr.shape[0]),
