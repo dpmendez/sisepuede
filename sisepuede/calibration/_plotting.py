@@ -49,12 +49,23 @@ def _resolve_pairs(
     if mode == "fuel_mix":
         if not sector:
             raise ValueError("sector is required when mode='fuel_mix'")
-        mask = df_comparison["iea_balance_code"] == sector
-        fuels = (
-            df_comparison.loc[mask, "iea_product_code"]
-            .dropna().unique().tolist()
+        sub = df_comparison[df_comparison["iea_balance_code"] == sector]
+        # Keep only fuels that have at least one non-NaN observation on
+        # either side; drops rows like ELECTOUT/GEOTHERM that exist in the
+        # crosswalk as placeholders but never carry data.
+        has_data = (
+            sub.groupby("iea_product_code")[["value_iea_tj", "value_sisepuede_tj"]]
+               .apply(lambda g: g.notna().any().any())
         )
-        return [(sector, f) for f in fuels if f != sector]
+        # Also drop aggregate meta-rows like "TOTAL" -- they are the sum
+        # across fuels, so plotting them alongside fuel shares double-counts
+        # and (for fuel_mix mode) forces the share to 1.0 by construction.
+        _AGGREGATE_PRODUCT_CODES = {"TOTAL"}
+        fuels = [f for f in sub["iea_product_code"].dropna().unique()
+                 if f != sector
+                 and f not in _AGGREGATE_PRODUCT_CODES
+                 and bool(has_data.get(f, False))]
+        return [(sector, f) for f in fuels]
     raise ValueError("mode must be 'primary' or 'fuel_mix'")
 
 
@@ -246,9 +257,23 @@ def plot_before_after_bar(
     after_vals  = [_val(df_comp_calibrated, b, p, "value_sisepuede_tj") for b, p in pairs]
 
     if mode == "fuel_mix":
-        iea_total    = _val(df_comp_baseline,   sector, sector, "value_iea_tj")
-        before_total = _val(df_comp_baseline,   sector, sector, "value_sisepuede_tj")
-        after_total  = _val(df_comp_calibrated, sector, sector, "value_sisepuede_tj")
+        def _sector_total(df_comp, col):
+            # Prefer an explicit (sector, sector) aggregate row when the
+            # crosswalk provides one (e.g. RESIDENT); fall back to summing
+            # across fuels when it doesn't (e.g. ELECTOUT).
+            row_total = _val(df_comp, sector, sector, col)
+            if pd.notna(row_total):
+                return row_total
+            m = (
+                (df_comp["iea_balance_code"] == sector)
+                & (df_comp["iea_product_code"] != sector)
+                & (df_comp["year"] == year_target)
+            )
+            return df_comp.loc[m, col].sum(min_count=1)
+
+        iea_total    = _sector_total(df_comp_baseline,   "value_iea_tj")
+        before_total = _sector_total(df_comp_baseline,   "value_sisepuede_tj")
+        after_total  = _sector_total(df_comp_calibrated, "value_sisepuede_tj")
         iea_vals    = [v / iea_total    if iea_total    else np.nan for v in iea_vals]
         before_vals = [v / before_total if before_total else np.nan for v in before_vals]
         after_vals  = [v / after_total  if after_total  else np.nan for v in after_vals]
