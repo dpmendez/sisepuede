@@ -43,9 +43,12 @@ class ProductionCalibrator:
     Parameters
     ----------
     models : SISEPUEDEModels or EnergyConsumption
-        Model instance passed to the underlying `Calibrator`. For the
-        verification run, `SISEPUEDEModels` with `allow_electricity_run=True`
-        is required (NemoMod is needed to score production against IEA).
+        Full model instance used for the verification projection at the end
+        of `calibrate`. `SISEPUEDEModels` with `allow_electricity_run=True`
+        is required to score production against IEA. The internal v2
+        calibrator is built separately from a plain `EnergyConsumption`
+        (with `include_energy_production=False`) so it mirrors the
+        standalone-v2 pipeline the surrogate was trained against.
     crosswalk : IEACrosswalk
     df_iea_long : pd.DataFrame
         Raw IEA data for one country. Same shape as v2's Calibrator expects.
@@ -76,12 +79,26 @@ class ProductionCalibrator:
         self.force_fingerprint_mismatch = force_fingerprint_mismatch
 
         # Internal v2 calibrator for phase 1 + consumption phase 2.
+        # Deliberately mirrors the standalone `run_energy_calibration
+        # --cal-option 3` pipeline: EnergyConsumption only, no NemoMod
+        # (include_energy_production=False). The surrogate was trained
+        # against the post-v2 consumption state produced by that same
+        # pipeline; using the full SISEPUEDEModels chain here would drive
+        # the QP off different residuals and yield a different post-v2
+        # state, tripping the fingerprint check at inference.
+        from sisepuede.models.energy_consumption import EnergyConsumption
+        from sisepuede.manager.sisepuede_models import SISEPUEDEModels
+        v2_model = (
+            EnergyConsumption(models.model_attributes)
+            if isinstance(models, SISEPUEDEModels)
+            else models
+        )
         self.v2 = Calibrator(
-            models,
+            v2_model,
             crosswalk,
             df_iea_long,
             year_target,
-            include_energy_production=True,
+            include_energy_production=False,
         )
 
     # ------------------------------------------------------------------
@@ -90,18 +107,20 @@ class ProductionCalibrator:
 
     def calibrate(
         self,
-        df_in:                pd.DataFrame,
-        plan:                 CalibrationPlan,
-        v2_option:            int   = 3,
-        v2_n_iter:            int   = 2,
-        v2_gamma:             float = 100.0,
+        df_in:                     pd.DataFrame,
+        plan:                      CalibrationPlan,
+        v2_option:                 int   = 3,
+        v2_n_iter:                 int   = 2,
+        v2_gamma:                  float = 100.0,
+        v2_enforce_varspec_bounds: bool  = False,
+        v2_simplex_mode:           str   = "full_simplex",
         # SQP knobs (production side):
-        gamma:                float = 1.0,
-        trust_radius:         float = 0.05,
-        max_iter:             int   = 10,
-        tol:                  float = 1e-4,
-        verify:               bool  = True,
-        verbose:              bool  = False,
+        gamma:                     float = 1.0,
+        trust_radius:              float = 0.05,
+        max_iter:                  int   = 10,
+        tol:                       float = 1e-4,
+        verify:                    bool  = True,
+        verbose:                   bool  = False,
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """Run v2 (phase 1 + consumption phase 2) then v3 production phase.
 
@@ -123,7 +142,11 @@ class ProductionCalibrator:
             print(f"[ProductionCalibrator] running v2 (option={v2_option}, n_iter={v2_n_iter})")
         df_v2, log_v2 = self.v2.calibrate(
             df_in, plan,
-            option=v2_option, n_iter=v2_n_iter, gamma=v2_gamma,
+            option=v2_option,
+            n_iter=v2_n_iter,
+            gamma=v2_gamma,
+            enforce_varspec_bounds=v2_enforce_varspec_bounds,
+            simplex_mode=v2_simplex_mode,
         )
 
         # ── Fingerprint check ───────────────────────────────────────────
@@ -266,8 +289,18 @@ class ProductionCalibrator:
         present in the model output. Uses the same crosswalk aggregation
         the training / SQP loop uses.
         """
-        # 1. Run the model.
-        df_out = self.v2._run_model(df_final)
+        # 1. Run the FULL model (including electricity) for verification.
+        # self.v2 was intentionally constructed with EnergyConsumption only
+        # (no NemoMod) to match the standalone-v2 pipeline the surrogate was
+        # trained against; here we need the full chain so we can score
+        # production residuals.
+        from sisepuede.manager.sisepuede_models import SISEPUEDEModels
+        if isinstance(self.models, SISEPUEDEModels):
+            df_out = self.models.project(
+                df_final, include_electricity_in_energy=True,
+            )
+        else:
+            df_out = self.models.project(df_final)
         time_period = self.v2._get_time_period(df_final)
 
         # 2. Extract raw per-tech values at the target time period and
@@ -311,4 +344,5 @@ class ProductionCalibrator:
             "residuals":    residuals,
             "n_targets":    len(iea_target_rows),
             "n_reportable": sum(1 for r in residuals if r["rel_err_pct"] is not None),
+            "df_out":       df_out,
         }

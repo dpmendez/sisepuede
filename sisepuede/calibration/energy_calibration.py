@@ -49,6 +49,7 @@ from sisepuede.calibration._plotting import (
     plot_before_after_discrepancy_bar,
     plot_before_after_time_series,
 )
+from sisepuede.calibration._surrogate import fingerprint_consumption_state
 from sisepuede.calibration._tables import (
     build_improvement_table,
     build_knob_tables,
@@ -356,29 +357,47 @@ def _save_calibrated_inputs(
     output_dir: str,
     tag: str,
     verbose: bool,
-) -> Tuple[str, str]:
-    """Save the calibrated input frame (original columns only) plus a record
-    of which columns were modified. Returns the two output paths."""
+    provenance: Optional[dict] = None,
+) -> Tuple[str, str, str]:
+    """Save the calibrated input frame (original columns only), the log of
+    which columns changed, and a `.txt` sidecar recording the run parameters
+    (so callers can trace a CSV back to the exact invocation that produced
+    it). Returns the three output paths."""
     original_cols      = df_input.columns.tolist()
     cols_in_calibrated = [c for c in original_cols if c in df_calibrated.columns]
     df_calibrated_out  = df_calibrated[cols_in_calibrated].copy()
 
     t = _tag_suffix(tag)
-    path_inputs  = os.path.join(
-        output_dir, f"input_data_{iso_country.lower()}_calibrated_{target_year}{t}.csv",
-    )
-    path_changed = os.path.join(
+    stem = f"input_data_{iso_country.lower()}_calibrated_{target_year}{t}"
+    path_inputs     = os.path.join(output_dir, f"{stem}.csv")
+    path_provenance = os.path.join(output_dir, f"{stem}.txt")
+    path_changed    = os.path.join(
         output_dir, f"calibrated_columns_{iso_country.lower()}_{target_year}{t}.csv",
     )
 
     df_calibrated_out.to_csv(path_inputs, index=False)
     _vprint(verbose, f"Saved calibrated inputs: {path_inputs}  shape={df_calibrated_out.shape}")
 
+    if provenance:
+        _write_provenance(path_provenance, provenance)
+        _vprint(verbose, f"Saved run provenance   : {path_provenance}")
+
     df_changed = _changed_columns(df_input_energy, df_calibrated, cols_in_calibrated)
     df_changed.to_csv(path_changed, index=False)
     _vprint(verbose, f"Saved changed-columns log: {path_changed}  ({len(df_changed)} columns adjusted)")
 
-    return path_inputs, path_changed
+    return path_inputs, path_changed, path_provenance
+
+
+def _write_provenance(path: str, provenance: dict) -> None:
+    """Write a small human-readable `key: value` sidecar recording the run
+    parameters that produced the accompanying calibrated CSV."""
+    lines = [f"# Provenance for {os.path.basename(path).replace('.txt', '.csv')}"]
+    for k in sorted(provenance):
+        v = provenance[k]
+        lines.append(f"{k}: {v}")
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +493,26 @@ def energy_calibration(
     )
 
     # ── 3. Baseline comparison ──────────────────────────────────────────────
-    df_out_baseline  = _run_energy_model(model_energycon, df_input_energy, "baseline", verbose)
+    if cal_option == 5:
+        from sisepuede.manager.sisepuede_models       import SISEPUEDEModels
+
+        # v3 needs SISEPUEDEModels (with NemoMod) for the verification run.
+        models_full = SISEPUEDEModels(
+            model_attributes,
+            allow_electricity_run      = True,
+            fp_julia                   = file_structure.dir_jl,
+            fp_nemomod_reference_files = file_structure.dir_ref_nemo,
+            fp_nemomod_temp_sqlite_db  = file_structure.fp_sqlite_tmp_nemomod_intermediate,
+            initialize_julia           = True,
+        )
+        df_out_baseline = models_full.project(
+            df_input_energy, include_electricity_in_energy=True,
+        ).merge(df_input_energy[["time_period", "year"]].drop_duplicates(),
+                on="time_period", how="left")
+    else:
+        df_out_baseline = _run_energy_model(
+            model_energycon, df_input_energy, "baseline", verbose,
+        )
     df_comp_baseline = _build_comparison(xw, df_out_baseline, df_iea_raw, start_year, end_year)
 
     n_pairs = df_comp_baseline[["iea_balance_code", "iea_product_code"]].drop_duplicates().shape[0]
@@ -510,20 +548,9 @@ def energy_calibration(
             )
         from sisepuede.calibration._training_pipeline import load_surrogate_bundle
         from sisepuede.calibration.calibrator_production      import ProductionCalibrator
-        from sisepuede.manager.sisepuede_models       import SISEPUEDEModels
 
         _vprint(verbose, f"Loading surrogate bundle from {surrogate_dir}")
         surrogate_bundle = load_surrogate_bundle(surrogate_dir)
-
-        # v3 needs SISEPUEDEModels (with NemoMod) for the verification run.
-        models_full = SISEPUEDEModels(
-            model_attributes,
-            allow_electricity_run      = True,
-            fp_julia                   = file_structure.dir_jl,
-            fp_nemomod_reference_files = file_structure.dir_ref_nemo,
-            fp_nemomod_temp_sqlite_db  = file_structure.fp_sqlite_tmp_nemomod_intermediate,
-            initialize_julia           = True,
-        )
 
         calibrator = ProductionCalibrator(
             models                     = models_full,
@@ -534,16 +561,18 @@ def energy_calibration(
             force_fingerprint_mismatch = v3_force_fp_mismatch,
         )
         df_calibrated, log = calibrator.calibrate(
-            df_in         = df_input_energy,
-            plan          = plan,
-            v2_option     = 3,                 # v2 full inside v3
-            v2_n_iter     = num_iterations,
-            v2_gamma      = gamma,
-            gamma         = v3_gamma,
-            trust_radius  = v3_trust_radius,
-            max_iter      = v3_max_iter,
-            verify        = v3_verify,
-            verbose       = verbose,
+            df_in                     = df_input_energy,
+            plan                      = plan,
+            v2_option                 = 3,                 # v2 full inside v3
+            v2_n_iter                 = num_iterations,
+            v2_gamma                  = gamma,
+            v2_enforce_varspec_bounds = enforce_varspec_bounds,
+            v2_simplex_mode           = simplex_mode,
+            gamma                     = v3_gamma,
+            trust_radius              = v3_trust_radius,
+            max_iter                  = v3_max_iter,
+            verify                    = v3_verify,
+            verbose                   = verbose,
         )
         df_log = calibrator.log_summary(log)
     else:
@@ -567,7 +596,26 @@ def energy_calibration(
         df_log = calibrator.log_summary(log)
 
     # ── 6. Post-calibration evaluation ──────────────────────────────────────
-    df_out_calibrated  = _run_energy_model(model_energycon, df_calibrated, "calibrated", verbose)
+    if cal_option == 5:
+        # Reuse the projection ProductionCalibrator._verify already ran on
+        # df_calibrated -- projecting a third time here occasionally returns
+        # a frame with no electricity output columns (NemoMod state carry-
+        # over), which produced all-NaN ELECTOUT rows in the comparison.
+        verify_log = log.get("verify") if isinstance(log, dict) else None
+        if verify_log and "df_out" in verify_log:
+            df_out_calibrated = verify_log["df_out"].merge(
+                df_calibrated[["time_period", "year"]].drop_duplicates(),
+                on="time_period", how="left",
+            )
+        else:
+            df_out_calibrated = models_full.project(
+                df_calibrated, include_electricity_in_energy=True,
+            ).merge(df_calibrated[["time_period", "year"]].drop_duplicates(),
+                    on="time_period", how="left")
+    else:
+        df_out_calibrated = _run_energy_model(
+            model_energycon, df_calibrated, "calibrated", verbose,
+        )
     df_comp_calibrated = _build_comparison(xw, df_out_calibrated, df_iea_raw, start_year, end_year)
 
     df_knobs = calibrator.summarize_knobs(df_input_energy, df_calibrated, plan)
@@ -582,9 +630,41 @@ def energy_calibration(
     )
 
     # ── 7. Save calibrated inputs ───────────────────────────────────────────
-    path_inputs, path_changed = _save_calibrated_inputs(
+    import datetime, subprocess
+    try:
+        _git_commit = subprocess.check_output(
+            ["git", "-C", _REPO_ROOT, "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+    except Exception:
+        _git_commit = "unknown"
+    provenance = {
+        "iso_country":            iso_country,
+        "target_year":            target_year,
+        "cal_option":             cal_option,
+        "num_iterations":         num_iterations,
+        "gamma":                  gamma,
+        "enforce_varspec_bounds": enforce_varspec_bounds,
+        "simplex_mode":           simplex_mode,
+        "start_year":             start_year,
+        "end_year":               end_year,
+        "iea_year_limit":         iea_year_limit,
+        "sisepuede_input":        path_sisepuede_input,
+        "crosswalk_file":         path_crosswalk_file,
+        "iea_data_dir":           path_iea_data_dir,
+        "tag":                    tag,
+        "surrogate_dir":          surrogate_dir if cal_option == 5 else "",
+        "consumption_fingerprint":
+            fingerprint_consumption_state(df_calibrated),
+        "generated_at":           datetime.datetime.now(
+                                     datetime.timezone.utc,
+                                  ).isoformat(timespec="seconds"),
+        "git_commit":             _git_commit,
+    }
+    path_inputs, path_changed, path_provenance = _save_calibrated_inputs(
         df_input, df_input_energy, df_calibrated,
         iso_country, target_year, path_output_dir, tag, verbose,
+        provenance=provenance,
     )
 
     # ── 8. Save analysis-ready dataframes (comparisons, knobs, log, coverage)
@@ -609,6 +689,7 @@ def energy_calibration(
     _vprint(verbose, f"  knob tables       : {knobs_dir}")
     _vprint(verbose, f"  data (CSVs)       : {data_dir}")
     _vprint(verbose, f"  calibrated inputs : {path_inputs}")
+    _vprint(verbose, f"  run provenance    : {path_provenance}")
     _vprint(verbose, f"  changed columns   : {path_changed}")
     _vprint(verbose, "─" * 70)
 
