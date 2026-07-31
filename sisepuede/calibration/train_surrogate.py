@@ -94,6 +94,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Accuracy gate: maximum test-set MAPE (%%) to accept a target.")
     p.add_argument("--fail-mode",  type=str, default="warn",
                    choices=["warn", "raise"])
+    p.add_argument("--hparam", action="append", default=None,
+                   metavar="KEY=VAL",
+                   help=("Override one regressor hyperparameter. Pass multiple "
+                         "times. Values are auto-cast to int/float when possible "
+                         "(e.g. --hparam max_iter=400 --hparam learning_rate=0.05)."))
+    p.add_argument("--hparams-json", type=str, default=None,
+                   help=("Path to a JSON file with the hyperparameter dict "
+                         "(e.g. best_spec.hyperparams serialised from grid search)."))
 
     # Split knobs.
     p.add_argument("--split-train", type=float, default=0.7)
@@ -108,6 +116,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--quiet", action="store_true")
     return p
+
+
+def _parse_hparams(pairs, path):
+    out = {}
+    if path:
+        import json
+        with open(path) as fh:
+            out.update(json.load(fh))
+    for entry in pairs or []:
+        k, _, v = entry.partition("=")
+        if not k or not v:
+            raise ValueError(f"--hparam must be KEY=VAL, got {entry!r}")
+        for cast in (int, float):
+            try:
+                out[k.strip()] = cast(v);  break
+            except ValueError:
+                out[k.strip()] = v
+    return out
 
 
 def _parse_iea_targets(raw: list) -> list:
@@ -125,6 +151,7 @@ def _parse_iea_targets(raw: list) -> list:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    hparams = _parse_hparams(args.hparam, args.hparams_json)
     verbose = not args.quiet
 
     iea_targets = (
@@ -147,6 +174,7 @@ def main() -> None:
     # ── SurrogateSpec ───────────────────────────────────────────────────
     spec = SurrogateSpec(
         model_kind      = args.model_kind,
+        hyperparams     = hparams,
         seed            = args.seed,
         target_r2_min   = args.r2_min,
         target_mape_max = args.mape_max,
