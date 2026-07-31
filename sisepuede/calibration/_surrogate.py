@@ -556,6 +556,7 @@ def fingerprint_consumption_state(
     df_input: pd.DataFrame,
     frac_columns: Optional[List[str]] = None,
     time_period_col: str = "time_period",
+    round_decimals: int = 10,
 ) -> str:
     """SHA-256 hash of the consumption-side `frac_*` columns in a SISEPUEDE
     input DataFrame.
@@ -564,6 +565,14 @@ def fingerprint_consumption_state(
     was trained under. The orchestrator (ProductionCalibrator) recomputes this
     on the candidate calibrated DataFrame and refuses to apply the
     surrogate when the fingerprints disagree.
+
+    Frac values are rounded to `round_decimals` before hashing so the
+    fingerprint is stable across CSV round-trips (whose ULP-level noise gets
+    amplified to ~1e-10 by AFOLU's cropland-fraction calculation) but still
+    changes for any semantically meaningful state difference (>= 1e-8 or so).
+    Set round_decimals=None to hash the raw float64 bits (the pre-tolerance
+    behaviour); the surrogate's stored fingerprint pre-dates the tolerance,
+    so callers verifying older bundles may want the raw hash.
 
     Parameters
     ----------
@@ -575,6 +584,8 @@ def fingerprint_consumption_state(
         with "frac_" (i.e. all `frac_inen_*`, `frac_trns_*`, `frac_scoe_*`).
     time_period_col : str
         Column that orders the rows for hashing.
+    round_decimals : int | None
+        Decimal places to round frac values to before hashing.
 
     Returns
     -------
@@ -589,11 +600,14 @@ def fingerprint_consumption_state(
         return "no-frac-columns"
 
     df = df_input[[time_period_col, *frac_columns]].sort_values(time_period_col)
+    arr = df[frac_columns].to_numpy(dtype=np.float64)
+    if round_decimals is not None:
+        arr = np.round(arr, decimals=round_decimals)
     h = hashlib.sha256()
     # bytes-based hashing of float64 values + column order + time_period order.
     h.update(repr(frac_columns).encode("utf-8"))
     h.update(df[time_period_col].to_numpy().tobytes())
-    h.update(df[frac_columns].to_numpy(dtype=np.float64).tobytes())
+    h.update(arr.tobytes())
     return h.hexdigest()
 
 
