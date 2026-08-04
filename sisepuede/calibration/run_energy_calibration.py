@@ -25,13 +25,13 @@ from sisepuede.calibration.energy_calibration import energy_calibration
 
 
 # ── Default paths (override on the command line if needed) ────────────────────
-DEFAULT_SISEPUEDE_INPUT = "/Users/dianamendez/sisepuede-data/input_data_peru_base.csv"
+DEFAULT_SISEPUEDE_INPUT = "/Users/dianamendez/sisepuede-calibration-in/input_data_peru_base.csv"
 DEFAULT_IEA_DATA_DIR    = "/Users/dianamendez/data_collection_temporary"
 DEFAULT_CROSSWALK_FILE  = (
     "/Users/dianamendez/feature-energy-calibration/"
     "sisepuede/ref/data_crosswalks/sisepuede_iea_energy_crosswalk.csv"
 )
-DEFAULT_OUTPUT_DIR      = "/Users/dianamendez/sisepuede-data"
+DEFAULT_OUTPUT_DIR      = "/Users/dianamendez/sisepuede-calibration-out"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -63,6 +63,26 @@ def _build_parser() -> argparse.ArgumentParser:
                        "How the Phase-2 QP treats the simplex constraint when "
                        "only some fuels of a simplex group have IEA targets. "
                    ))
+    p.add_argument("--consumption-lb", type=float, default=None,
+                   help=(
+                       "Lower-bound scale factor applied to every consumption "
+                       "VariableSpec in the calibration plan. Covers cal-"
+                       "options 0-4 and the v2 inner phase of cal-option 5. "
+                       "Production-side bounds live in the surrogate envelope "
+                       "and are set at training time via "
+                       "generate_surrogate_data.py --knob-lb. Default: "
+                       "VariableSpec dataclass defaults."
+                   ))
+    p.add_argument("--consumption-ub", type=float, default=None,
+                   help=(
+                       "Upper-bound scale factor applied to every consumption "
+                       "VariableSpec in the calibration plan. Covers cal-"
+                       "options 0-4 and the v2 inner phase of cal-option 5. "
+                       "Production-side bounds live in the surrogate envelope "
+                       "and are set at training time via "
+                       "generate_surrogate_data.py --knob-ub. Default: "
+                       "VariableSpec dataclass defaults."
+                   ))
 
     # Time window
     p.add_argument("--start-year",     type=int, default=2015,
@@ -78,7 +98,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--iea-data-dir",    type=str, default=DEFAULT_IEA_DATA_DIR,
                    help="Directory holding the IEA energy balance files.")
     p.add_argument("--crosswalk-file",  type=str, default=DEFAULT_CROSSWALK_FILE,
-                   help="Path to the IEA↔SISEPUEDE crosswalk CSV.")
+                   help="Path to the IEA-SISEPUEDE crosswalk CSV.")
     p.add_argument("--output-dir",      type=str, default=DEFAULT_OUTPUT_DIR,
                    help="Directory where outputs (plots/, tables/, CSVs) are written.")
 
@@ -132,6 +152,8 @@ def main() -> None:
         gamma                  = args.gamma,
         enforce_varspec_bounds = args.enforce_varspec_bounds,
         simplex_mode           = args.simplex_mode,
+        consumption_lb         = args.consumption_lb,
+        consumption_ub         = args.consumption_ub,
         verbose                = not args.quiet,
         # v3 (cal-option 5) forwards
         surrogate_dir          = args.surrogate,

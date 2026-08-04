@@ -420,6 +420,8 @@ def energy_calibration(
     gamma:                  float = 100.0,
     enforce_varspec_bounds: bool = False,
     simplex_mode:           str = "full_simplex",
+    consumption_lb:         Optional[float] = None,
+    consumption_ub:         Optional[float] = None,
     verbose:                bool = True,
     surrogate_dir:          Optional[str] = None,
     v3_gamma:               float = 1.0,
@@ -454,6 +456,15 @@ def energy_calibration(
         QP regularisation weight (cal_option in {3, 4}).
     enforce_varspec_bounds : bool
         Enforce VariableSpec bounds inside the QP (cal_option in {3, 4}).
+    consumption_lb, consumption_ub : float | None
+        Uniform scale-factor bounds applied to every consumption
+        VariableSpec built by `build_energy_calibration_plan`. Covers
+        cal_option in {0..4} and the v2 inner phase of cal_option == 5.
+        Production-side bounds live in the surrogate training envelope
+        and are set at surrogate-training time (see
+        `generate_surrogate_data.py --knob-lb / --knob-ub`); the v3
+        production SQP always uses that envelope. None -> VariableSpec
+        dataclass defaults.
     verbose : bool
         When False, suppress progress prints and skip non-essential plots.
 
@@ -521,7 +532,9 @@ def energy_calibration(
     _save_baseline_plots(df_comp_baseline, iso_country, target_year, plots_dir, tag, verbose)
 
     # ── 4. Calibration plan ─────────────────────────────────────────────────
-    plan = build_energy_calibration_plan(model_attributes)
+    plan = build_energy_calibration_plan(
+        model_attributes, lb=consumption_lb, ub=consumption_ub,
+    )
     _vprint(verbose,
         f"Calibration plan: {len(plan)} groups  "
         f"(scalar={len(plan.scalar_groups())}, simplex={len(plan.simplex_groups())})"
@@ -646,6 +659,8 @@ def energy_calibration(
         "gamma":                  gamma,
         "enforce_varspec_bounds": enforce_varspec_bounds,
         "simplex_mode":           simplex_mode,
+        "consumption_lb":         consumption_lb,
+        "consumption_ub":         consumption_ub,
         "start_year":             start_year,
         "end_year":               end_year,
         "iea_year_limit":         iea_year_limit,
