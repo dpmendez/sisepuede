@@ -116,6 +116,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tag",              type=str, default="",
                    help="Optional suffix appended to the output subdirectory name.")
 
+    p.add_argument("--min-ok-frac", type=float, default=0.95,
+                   help=("Minimum fraction of LHS samples that must succeed "
+                         "(status='ok'). The sweep is aborted (nothing "
+                         "pickled) when the observed rate is lower -- "
+                         "see run_status.csv for the per-sample breakdown. "
+                         "Default 0.95."))
+
     p.add_argument("--quiet", action="store_true",
                    help="Suppress progress prints.")
     return p
@@ -192,6 +199,7 @@ def main() -> None:
         output_dir          = args.output_dir,
         tag                 = args.tag,
         verbose             = verbose,
+        min_ok_frac         = args.min_ok_frac,
     )
 
     if verbose:

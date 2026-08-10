@@ -83,6 +83,11 @@ def generate_lhs_training_data(
     output_dir:          Optional[str] = None,
     tag:                 str = "",
     verbose:             bool = True,
+    # Quality gate: fraction of LHS samples that must have status="ok".
+    # Refuses to persist / return when the observed rate is lower, so
+    # partial-failure sweeps (SQLite lock, silent NemoMod swallow, etc.)
+    # don't get pickled and mistaken for valid training data.
+    min_ok_frac:         float = 0.95,
 ) -> Tuple[SensitivityResult, Dict[str, Any]]:
     """Run an LHS sweep on SISEPUEDE and return (SensitivityResult, metadata).
 
@@ -194,6 +199,36 @@ def generate_lhs_training_data(
 
     wall_clock = time.time() - t0
 
+    # ── Quality gate: check per-sample success rate before persisting
+    status = result.run_status
+    n_total  = len(status) if status is not None else 0
+    n_ok     = int((status["status"] == "ok").sum()) if n_total else 0
+    n_fail   = int((status["status"] == "failed").sum()) if n_total else 0
+    n_missing= int((status["status"] == "missing_electricity").sum()) if n_total else 0
+    ok_frac  = (n_ok / n_total) if n_total else 0.0
+    if verbose:
+        print(f"  runs: {n_ok}/{n_total} ok, {n_fail} failed, "
+              f"{n_missing} missing electricity  (min_ok_frac={min_ok_frac:.2f})")
+    if n_total and ok_frac < min_ok_frac:
+        # Persist run_status so the caller can inspect what failed even
+        # after we abort, but skip pickling result.pkl -- the frame is
+        # partially garbage and would silently poison surrogate training.
+        if output_dir is not None:
+            subdir = _build_output_subdir(
+                output_dir, iso_country, target_year, n_lhs, seed, tag,
+            )
+            status_path = os.path.join(subdir, "run_status.csv")
+            status.to_csv(status_path, index=False)
+            print(f"  wrote run_status.csv (failures only) -> {status_path}")
+        raise RuntimeError(
+            f"Data generation aborted: only {n_ok}/{n_total} samples "
+            f"succeeded ({ok_frac:.1%} < min_ok_frac={min_ok_frac:.0%}). "
+            f"{n_fail} raised, {n_missing} returned no electricity output. "
+            f"Common causes: parallel data-gen runs sharing "
+            f"fp_nemomod_temp_sqlite_db (SQLite lock), Julia/NemoMod init "
+            f"failure. Inspect run_status.csv for the per-sample breakdown."
+        )
+
     # ── Metadata
     metadata: Dict[str, Any] = {
         "iso_country":              iso_country,
@@ -259,15 +294,18 @@ def _persist_artifacts(
     metadata:        Dict[str, Any],
     verbose:         bool,
 ) -> None:
-    """Write result.pkl, baseline.pkl, metadata.json into `subdir`."""
+    """Write result.pkl, baseline.pkl, metadata.json, run_status.csv into `subdir`."""
     result_path   = os.path.join(subdir, "result.pkl")
     baseline_path = os.path.join(subdir, "baseline.pkl")
     metadata_path = os.path.join(subdir, "metadata.json")
+    status_path   = os.path.join(subdir, "run_status.csv")
 
     pd.to_pickle(result,          result_path)
     pd.to_pickle(df_input_energy, baseline_path)
     with open(metadata_path, "w") as fp:
         json.dump(metadata, fp, indent=2, sort_keys=True)
+    if result.run_status is not None:
+        result.run_status.to_csv(status_path, index=False)
 
     if verbose:
         rs = _file_size_mb(result_path)
@@ -276,6 +314,8 @@ def _persist_artifacts(
         print(f"    result.pkl   ({rs:.1f} MB)")
         print(f"    baseline.pkl ({bs:.1f} MB)")
         print(f"    metadata.json")
+        if result.run_status is not None:
+            print(f"    run_status.csv ({len(result.run_status)} rows)")
 
 
 def _file_size_mb(path: str) -> float:

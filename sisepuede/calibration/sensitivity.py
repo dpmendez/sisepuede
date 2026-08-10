@@ -179,6 +179,14 @@ class SensitivityResult:
         Unperturbed model output.
     baseline_iea_comparison : pd.DataFrame
         IEA comparison table for the unperturbed baseline (all years).
+    run_status : pd.DataFrame
+        One row per LHS/OAT sample recording whether the projection
+        succeeded and, if not, what went wrong. Columns:
+        run_index, elapsed_s, status ("ok" | "failed" | "missing_electricity"),
+        error_class, error_message, has_nemomod_cols.
+        Used by downstream data-generation code to gate persistence on a
+        minimum success rate so silent partial failures don't get pickled
+        and mistaken for valid training data.
     """
     variable_specs: List[VariableSpec]
     sampling_mode: str
@@ -187,6 +195,7 @@ class SensitivityResult:
     model_outputs: pd.DataFrame
     baseline_output: pd.DataFrame
     baseline_iea_comparison: pd.DataFrame
+    run_status: pd.DataFrame = None
 
 
 ##########################
@@ -772,6 +781,7 @@ class SensitivityRunner:
 
         all_outputs     = []
         all_comparisons = []
+        status_rows     = []
         n_runs          = len(samples_df)
 
         for run_idx, row in samples_df.iterrows():
@@ -798,27 +808,73 @@ class SensitivityRunner:
             )
             t0 = time.time()
 
-            df_out, df_comp = self._run_single(variable_scales, specs=specs)
+            # Guard the projection call so a single-sample failure doesn't
+            # kill the whole sweep, and so we can report per-sample status.
+            status_row = {
+                "run_index":         int(run_idx),
+                "elapsed_s":         float("nan"),
+                "status":            "ok",
+                "error_class":       "",
+                "error_message":     "",
+                "has_nemomod_cols":  False,
+            }
+            try:
+                df_out, df_comp = self._run_single(variable_scales, specs=specs)
+                df_out  = df_out.copy();  df_out.insert(0,  "run_index", run_idx)
+                df_comp = df_comp.copy(); df_comp.insert(0, "run_index", run_idx)
+                all_outputs.append(df_out)
+                all_comparisons.append(df_comp)
 
-            df_out          = df_out.copy()
-            df_out.insert(0, "run_index", run_idx)
+                # SISEPUEDEModels.project silently swallows a NemoMod
+                # exception and returns a frame with no nemomod_* columns.
+                # Detect that here rather than trusting "no exception".
+                has_nemo = any(c.startswith("nemomod_") for c in df_out.columns)
+                status_row["has_nemomod_cols"] = has_nemo
+                if self.include_energy_production and not has_nemo:
+                    status_row["status"] = "missing_electricity"
+                    status_row["error_class"] = "SilentNemoModFailure"
+                    status_row["error_message"] = (
+                        "projection returned no nemomod_* columns despite "
+                        "include_energy_production=True; likely NemoMod "
+                        "raised and SISEPUEDEModels.project swallowed it"
+                    )
+                    print(f"MISSING_ELECTRICITY ({time.time() - t0:.1f}s)")
+                else:
+                    print(f"done ({time.time() - t0:.1f}s)")
+            except Exception as e:
+                status_row["status"] = "failed"
+                status_row["error_class"] = type(e).__name__
+                status_row["error_message"] = str(e)[:500]
+                print(f"FAILED: {type(e).__name__}: "
+                      f"{str(e)[:120]} ({time.time() - t0:.1f}s)")
 
-            df_comp         = df_comp.copy()
-            df_comp.insert(0, "run_index", run_idx)
+            status_row["elapsed_s"] = float(time.time() - t0)
+            status_rows.append(status_row)
 
-            all_outputs.append(df_out)
-            all_comparisons.append(df_comp)
+        run_status = pd.DataFrame(status_rows, columns=[
+            "run_index", "elapsed_s", "status",
+            "error_class", "error_message", "has_nemomod_cols",
+        ])
 
-            print(f"done ({time.time() - t0:.1f}s)")
-
+        # A concat of an empty list would raise; guard against the all-fail
+        # case so the runner still returns a well-formed result.
+        empty_out  = pd.DataFrame({"run_index": pd.Series(dtype=int)})
+        empty_comp = pd.DataFrame({"run_index": pd.Series(dtype=int)})
         return SensitivityResult(
             variable_specs          = specs,
             sampling_mode           = sampling_mode,
             input_samples           = samples_df.copy(),
-            iea_comparison          = pd.concat(all_comparisons, ignore_index=True),
-            model_outputs           = pd.concat(all_outputs,     ignore_index=True),
+            iea_comparison          = (
+                pd.concat(all_comparisons, ignore_index=True)
+                if all_comparisons else empty_comp
+            ),
+            model_outputs           = (
+                pd.concat(all_outputs, ignore_index=True)
+                if all_outputs else empty_out
+            ),
             baseline_output         = self.baseline_output.copy(),
             baseline_iea_comparison = self.baseline_iea_comparison.copy(),
+            run_status              = run_status,
         )
 
     # ------------------------------------------------------------------
