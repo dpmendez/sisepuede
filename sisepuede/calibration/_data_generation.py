@@ -17,7 +17,16 @@ Output layout (when `output_dir` is provided):
         result.pkl      # SensitivityResult (scale factors + all SSP outputs)
         baseline.pkl    # df_input_energy -- the calibrated post-AFOLU/IPPU frame
         metadata.json   # provenance (country/year, knob config, fingerprint,
-                        # wall-clock, sisepuede/git info)
+                        # wall-clock, sisepuede/git info, LHS design_path/hash)
+
+An optional `design_path` argument controls where the unit-cube LHS
+design ([0,1]^D, country- and year-agnostic) is stored. When given,
+the design is loaded from that path if it exists, else sampled fresh
+and saved there. This lets a single design drive multiple bundles
+(different countries, years, or knob bounds) with byte-identical
+sample points.
+`metadata.json` records the `design_path`, `design_source`, and `design_hash`
+so downstream tools can prove two bundles share a design.
 
 The baseline pickle is what closes the reproducibility loop: given
 (result.pkl, baseline.pkl) alone, any downstream caller can reconstruct the
@@ -49,7 +58,13 @@ from sisepuede.calibration.sensitivity import (
     SensitivityResult,
     SensitivityRunner,
     VariableSpec,
+    sample_lhs_unit_cube,
 )
+
+try:                                                     # scipy is already a runtime dep via sensitivity.py
+    from scipy.stats.qmc import scale as lhs_scale
+except ImportError:                                      # pragma: no cover
+    lhs_scale = None                                     # sensitivity.py will error first
 
 
 # Default production-side knob families endorsed by the SSP author
@@ -88,6 +103,15 @@ def generate_lhs_training_data(
     # partial-failure sweeps (SQLite lock, silent NemoMod swallow, etc.)
     # don't get pickled and mistaken for valid training data.
     min_ok_frac:         float = 0.95,
+    # Shared LHS-design plumbing. When `design_path` is given:
+    #   - if the file exists, the unit-cube [0,1]^D design is loaded from
+    #     it and rescaled to `knob_bounds`; sampling is skipped.
+    #   - otherwise a fresh design is sampled from `(seed, D, n_lhs)` and
+    #     written to that path so subsequent runs (other countries /
+    #     years / bound choices) can reuse the same sample points.
+    # When `design_path` is None the design is sampled in-process and
+    # not persisted separately (preserves the pre-refactor behaviour).
+    design_path:         Optional[str] = None,
 ) -> Tuple[SensitivityResult, Dict[str, Any]]:
     """Run an LHS sweep on SISEPUEDE and return (SensitivityResult, metadata).
 
@@ -184,6 +208,31 @@ def generate_lhs_training_data(
         print(f"  active specs        : {len(specs)}")
         print(f"  n_lhs               : {n_lhs}  (seed={seed})")
 
+    # ── Obtain the LHS design (load-or-sample-then-rescale)
+    #
+    # The unit-cube design is [0,1]^D and depends only on (seed, D, N)
+    # and the ordered spec columns. Storing it separately from the run
+    # outputs lets a single file drive multiple countries/years/bounds
+    knob_columns = [s.column for s in specs]
+    design_source = _load_or_sample_unit_design(
+        design_path  = design_path,
+        knob_columns = knob_columns,
+        n_lhs        = n_lhs,
+        seed         = seed,
+        verbose      = verbose,
+    )
+    unit = design_source["unit"]
+
+    # Rescale [0,1]^D -> [lb, ub]^D using scipy's canonical helper (the
+    # same call sample_lhs uses internally, so numeric behaviour is
+    # byte-identical to the pre-refactor path).
+    lb_arr = np.array([s.lb for s in specs])
+    ub_arr = np.array([s.ub for s in specs])
+    samples_df = pd.DataFrame(
+        lhs_scale(unit.values, lb_arr, ub_arr),
+        columns=knob_columns,
+    ).reset_index(drop=True)
+
     # ── Run the sweep
     runner = SensitivityRunner(
         models                    = models,
@@ -195,7 +244,7 @@ def generate_lhs_training_data(
         year_min                  = year_min,
         year_max                  = year_max,
     )
-    result = runner.run_lhs(specs, n_samples=n_lhs, seed=seed)
+    result = runner.run_samples(samples_df, specs)
 
     wall_clock = time.time() - t0
 
@@ -248,6 +297,13 @@ def generate_lhs_training_data(
         "python_version":           sys.version.split()[0],
         "git_commit":               _git_commit_hash(),
         "tag":                      tag,
+        # LHS-design provenance. Two bundles that share `design_hash`
+        # were driven by the exact same unit-cube sample points, even
+        # if they were run on different countries, years, or bound
+        # boxes -- useful for global-ensemble diagnostics.
+        "design_path":              design_source["path"],
+        "design_source":            design_source["source"],  # "loaded" | "sampled" | "in_memory"
+        "design_hash":              design_source["hash"],
     }
     if verbose:
         print(f"  wall clock          : {wall_clock:.1f} s "
@@ -320,6 +376,74 @@ def _persist_artifacts(
 
 def _file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024.0 * 1024.0)
+
+
+def _load_or_sample_unit_design(
+    design_path:  Optional[str],
+    knob_columns: List[str],
+    n_lhs:        int,
+    seed:         int,
+    verbose:      bool,
+) -> Dict[str, Any]:
+    """Load a persisted unit-cube LHS design, or sample and (optionally)
+    persist a fresh one.
+
+    Returns a dict with keys `unit` (the DataFrame in [0,1]^D),
+    `source` ("loaded" | "sampled" | "in_memory"), `path` (str | None),
+    and `hash` (SHA-256 hex digest of the design's float64 bytes plus
+    its ordered column names -- for provenance / equality checks
+    across bundles).
+
+    On load, both the shape and the ordered column set are validated
+    against `(n_lhs, knob_columns)`; a mismatch raises loudly so a
+    stale design file cannot silently drive a differently-configured
+    run.
+    """
+    import hashlib
+
+    if design_path is not None and os.path.exists(design_path):
+        unit = pd.read_csv(design_path)
+        if unit.shape != (n_lhs, len(knob_columns)):
+            raise ValueError(
+                f"design file {design_path!r} has shape {unit.shape}; "
+                f"expected ({n_lhs}, {len(knob_columns)}). Check "
+                f"--n-lhs and the active knob set."
+            )
+        if list(unit.columns) != knob_columns:
+            raise ValueError(
+                f"design file {design_path!r} column set does not match "
+                f"the active specs. First diff: "
+                f"expected {knob_columns[:3]}..., got {list(unit.columns)[:3]}..."
+            )
+        source = "loaded"
+        if verbose:
+            print(f"  loaded LHS design   : {design_path}  shape={unit.shape}")
+    else:
+        unit = sample_lhs_unit_cube(knob_columns, n_lhs, seed)
+        source = "sampled"
+        if design_path is not None:
+            os.makedirs(os.path.dirname(design_path) or ".", exist_ok=True)
+            unit.to_csv(design_path, index=False)
+            if verbose:
+                print(f"  wrote  LHS design   : {design_path}  shape={unit.shape}")
+        else:
+            source = "in_memory"
+
+    # Hash: canonical bytes of the rounded float64 values + the ordered
+    # column names. Rounding before hashing keeps the digest stable
+    # across CSV round-trip (12 decimals matches the tolerance used by
+    # fingerprint_consumption_state).
+    h = hashlib.sha256()
+    h.update(repr(list(unit.columns)).encode("utf-8"))
+    h.update(np.round(unit.to_numpy(dtype=np.float64), decimals=12).tobytes())
+    design_hash = h.hexdigest()
+
+    return {
+        "unit":   unit,
+        "source": source,
+        "path":   design_path,
+        "hash":   design_hash,
+    }
 
 
 def _git_commit_hash() -> Optional[str]:

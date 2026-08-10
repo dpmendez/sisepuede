@@ -123,6 +123,21 @@ def _build_parser() -> argparse.ArgumentParser:
                          "see run_status.csv for the per-sample breakdown. "
                          "Default 0.95."))
 
+    p.add_argument(
+        "--design-path", type=str, default=None,
+        help=(
+            "Path to a CSV file holding the unit-cube [0,1]^D LHS design "
+            "(rows = samples, columns = knob names, values in [0,1]). "
+            "If the file exists, the design is loaded from it (sampling "
+            "is skipped) and rescaled to --knob-lb/--knob-ub; if it "
+            "does not exist, a fresh design is sampled from --seed / "
+            "--n-lhs and written to that path so subsequent runs "
+            "(other countries, years, or bound choices) can reuse the "
+            "same sample points. When omitted, the design is sampled "
+            "in-process and not persisted separately."
+        ),
+    )
+
     p.add_argument("--quiet", action="store_true",
                    help="Suppress progress prints.")
     return p
@@ -200,6 +215,7 @@ def main() -> None:
         tag                 = args.tag,
         verbose             = verbose,
         min_ok_frac         = args.min_ok_frac,
+        design_path         = args.design_path,
     )
 
     if verbose:

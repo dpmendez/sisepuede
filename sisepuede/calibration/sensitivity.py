@@ -507,6 +507,46 @@ def sample_oat(
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
+def sample_lhs_unit_cube(
+    columns: List[str],
+    n_samples: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Draw a Latin Hypercube design in the unit cube [0, 1]^D.
+
+    This is the portable, bounds-agnostic form of an LHS design. It
+    depends only on `(len(columns), n_samples, seed)`; the knob bounds
+    enter later at rescale time (`lb + unit * (ub - lb)`). The same
+    unit-cube file can therefore drive multiple countries, target years,
+    and bound choices, provided the ordered `columns` list is the same.
+
+    Parameters
+    ----------
+    columns : List[str]
+        Ordered knob column names. Used only as the DataFrame's column
+        labels so a persisted design is self-documenting; the numeric
+        values in [0, 1] do not depend on the names.
+    n_samples : int
+        Number of samples (rows).
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Shape (n_samples, len(columns)) with values in [0, 1]. Index is
+        a fresh 0..N-1 integer index.
+    """
+    if not _SCIPY_AVAILABLE:
+        raise ImportError(
+            "scipy >= 1.7 is required for LHS sampling."
+            "Install with: pip install scipy"
+        )
+    sampler = LatinHypercube(d=len(columns), seed=seed)
+    unit    = sampler.random(n=n_samples)                # (n_samples, D) in [0, 1]
+    return pd.DataFrame(unit, columns=list(columns)).reset_index(drop=True)
+
+
 def sample_lhs(
     specs: List[VariableSpec],
     n_samples: int = 50,
@@ -516,6 +556,12 @@ def sample_lhs(
 
     Each row is one sample: a full set of scale factors for all variables,
     drawn from a space-filling design bounded by [spec.lb, spec.ub].
+
+    Byte-identical to the pre-refactor implementation: internally, this
+    just calls `sample_lhs_unit_cube` and then rescales via
+    `scipy.stats.qmc.scale`. Callers who want to persist the LHS design
+    for reuse across countries/years should use `sample_lhs_unit_cube`
+    directly.
 
     Parameters
     ----------
@@ -537,19 +583,12 @@ def sample_lhs(
     ImportError
         If scipy is not installed.
     """
-    if not _SCIPY_AVAILABLE:
-        raise ImportError(
-            "scipy >= 1.7 is required for LHS sampling."
-            "Install with: pip install scipy"
-        )
-
     cols = [s.column for s in specs]
     lb   = np.array([s.lb for s in specs])
     ub   = np.array([s.ub for s in specs])
 
-    sampler      = LatinHypercube(d=len(specs), seed=seed)
-    unit_samples = sampler.random(n=n_samples)     # (n_samples, n_vars) in [0, 1]
-    scaled       = lhs_scale(unit_samples, lb, ub) # (n_samples, n_vars) in [lb, ub]
+    unit   = sample_lhs_unit_cube(cols, n_samples, seed)
+    scaled = lhs_scale(unit.values, lb, ub)              # (n_samples, D) in [lb, ub]
 
     return pd.DataFrame(scaled, columns=cols).reset_index(drop=True)
 
@@ -942,6 +981,44 @@ class SensitivityRunner:
             f"(seed={seed})"
         )
         return self._collect_results(samples_df, "lhs", specs)
+
+    def run_samples(
+        self,
+        samples_df: pd.DataFrame,
+        specs: List[VariableSpec],
+        sampling_mode: str = "lhs",
+    ) -> SensitivityResult:
+        """Execute a pre-built samples DataFrame through the model.
+
+        Same behaviour as `run_lhs` but skips sampling: the caller
+        supplies the (n_samples, n_vars) scale-factor matrix directly.
+        Enables externally-generated designs — for instance a unit-cube
+        LHS loaded from a shared registry and rescaled to the specs'
+        bounds.
+
+        Parameters
+        ----------
+        samples_df : pd.DataFrame
+            Shape (n_samples, len(specs)). Columns must match
+            `[s.column for s in specs]` in name and order; values are
+            scale factors already scaled to each spec's [lb, ub] box.
+        specs : List[VariableSpec]
+            The same list used to build `samples_df.columns`.
+        sampling_mode : str
+            Stored on the resulting SensitivityResult (defaults to
+            "lhs" since that's the intended use).
+        """
+        expected = [s.column for s in specs]
+        if list(samples_df.columns) != expected:
+            raise ValueError(
+                "run_samples: samples_df.columns must equal "
+                "[s.column for s in specs] in name and order."
+            )
+        print(
+            f"{sampling_mode.upper()}: {len(samples_df)} samples across "
+            f"{len(specs)} variables (pre-built design)"
+        )
+        return self._collect_results(samples_df, sampling_mode, specs)
 
 
 ############################
