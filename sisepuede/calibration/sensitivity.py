@@ -870,7 +870,9 @@ class SensitivityRunner:
         status_rows     = []
         n_runs          = len(samples_df)
 
-        for run_idx, row in samples_df.iterrows():
+        for i, (run_idx, row) in enumerate(samples_df.iterrows()):
+            progress = f"{i + 1:>{len(str(n_runs))}}/{n_runs} " \
+                       f"(run_index={run_idx})"
             variable_scales = row.to_dict()
 
             # Resume: skip runs whose shard file already exists. This is
@@ -879,10 +881,7 @@ class SensitivityRunner:
             if shards_dir is not None:
                 shard_path = _shard_path(shards_dir, int(run_idx))
                 if os.path.exists(shard_path):
-                    print(
-                        f"  Run {run_idx + 1:>{len(str(n_runs))}}/{n_runs}  "
-                        f"SKIPPED (shard exists)"
-                    )
+                    print(f"  Run {progress}  SKIPPED (shard exists)")
                     continue
 
             # build a compact label for the progress line
@@ -900,7 +899,7 @@ class SensitivityRunner:
                 label = f"{len(varying)} vars perturbed"
 
             print(
-                f"  Run {run_idx + 1:>{len(str(n_runs))}}/{n_runs}  {label}",
+                f"  Run {progress}  {label}",
                 end=" ... ",
                 flush=True,
             )
