@@ -123,7 +123,10 @@ def build_energy_calibration_plan(
         Groups are ordered: TFC -> TES -> Imports/Exports -> Transport fuel ->
         ENTC -> Industry fuel -> Residential fuel -> Commercial fuel.
     """
-    fields_in: Set[str] = set(model_attributes.all_variable_fields_input)
+    # Sorted, not a set: every `[f for f in fields_in ...]` below inherits
+    # this ordering, and the resulting CalibrationGroup.specs lists are
+    # persisted in things like `design.csv` (unit-cube LHS design).
+    fields_in: List[str] = sorted(model_attributes.all_variable_fields_input)
     plan = CalibrationPlan()
 
     ##  Attribute tables

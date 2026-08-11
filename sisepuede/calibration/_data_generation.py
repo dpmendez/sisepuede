@@ -772,11 +772,33 @@ def _load_or_sample_unit_design(
                 f"expected ({n_lhs}, {len(knob_columns)}). Check "
                 f"--n-lhs and the active knob set."
             )
-        if list(unit.columns) != knob_columns:
+        loaded_cols = list(unit.columns)
+        if loaded_cols != knob_columns:
+            # Point at the ACTUAL first mismatching column so a stale
+            # design file (created under a different knob set or plan
+            # ordering) is easy to diagnose. The error also names any
+            # columns present in one set but missing from the other so
+            # "renamed knob" cases show up clearly.
+            first_diff = next(
+                (i for i, (a, b) in enumerate(zip(loaded_cols, knob_columns))
+                 if a != b),
+                min(len(loaded_cols), len(knob_columns)),
+            )
+            only_expected = set(knob_columns) - set(loaded_cols)
+            only_loaded   = set(loaded_cols)   - set(knob_columns)
             raise ValueError(
                 f"design file {design_path!r} column set does not match "
-                f"the active specs. First diff: "
-                f"expected {knob_columns[:3]}..., got {list(unit.columns)[:3]}..."
+                f"the active specs.\n"
+                f"  first diff at position {first_diff}:\n"
+                f"    expected: {knob_columns[first_diff] if first_diff < len(knob_columns) else '(end)'}\n"
+                f"    got     : {loaded_cols[first_diff]   if first_diff < len(loaded_cols)   else '(end)'}\n"
+                f"  columns in the plan but not in the file: "
+                f"{sorted(only_expected) if only_expected else 'none'}\n"
+                f"  columns in the file but not in the plan: "
+                f"{sorted(only_loaded)   if only_loaded   else 'none'}\n"
+                f"If the columns are the same but ordered differently, "
+                f"delete the file and re-run so a fresh design is written "
+                f"with the current plan ordering."
             )
         source = "loaded"
         if verbose:
