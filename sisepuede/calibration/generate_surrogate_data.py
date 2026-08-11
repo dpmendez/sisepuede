@@ -80,10 +80,12 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Generate LHS training data for the v3 energy-production surrogate.",
     )
 
-    p.add_argument("--country",     type=str, required=True,
-                   help="ISO-3 country code (e.g. PER, ARG, KEN).")
-    p.add_argument("--target-year", type=int, required=True,
-                   help="Calendar year the surrogate is trained to predict at.")
+    p.add_argument("--country",     type=str, default=None,
+                   help="ISO-3 country code (e.g. PER, ARG, KEN). "
+                        "Required except with --design-only.")
+    p.add_argument("--target-year", type=int, default=None,
+                   help="Calendar year the surrogate is trained to predict at. "
+                        "Required except with --design-only.")
     p.add_argument("--n-lhs",       type=int, default=2000,
                    help="Number of LHS samples (default: 2000).")
     p.add_argument("--seed",        type=int, default=42,
@@ -157,6 +159,16 @@ def _build_parser() -> argparse.ArgumentParser:
                          "metadata.json. Applies the same --min-ok-frac "
                          "quality gate as the unbatched path."))
 
+    p.add_argument("--design-only", action="store_true",
+                   help=("Only sample the unit-cube LHS design and write "
+                         "it to --design-path, then exit. Skips SISEPUEDE / "
+                         "NemoMod / Julia init entirely; needs only "
+                         "--seed / --n-lhs / --design-path (and --knob-prefix "
+                         "if overriding defaults). Use this to pre-generate "
+                         "a shared design that will drive multiple batches, "
+                         "countries, or target years -- no SISEPUEDE inputs "
+                         "loaded, no country data touched."))
+
     p.add_argument("--quiet", action="store_true",
                    help="Suppress progress prints.")
     return p
@@ -166,12 +178,77 @@ def main() -> None:
     args = _build_parser().parse_args()
     verbose = not args.quiet
 
+    # Post-parse validation for the mode-dependent required args.
+    if not args.design_only:
+        missing = [
+            n for n, v in [("--country", args.country),
+                           ("--target-year", args.target_year)]
+            if v is None
+        ]
+        if missing:
+            raise SystemExit(
+                f"error: the following arguments are required unless "
+                f"--design-only is set: {', '.join(missing)}"
+            )
+
     if verbose:
         print("=" * 72)
-        print(f" v3 training-data generation  --  {args.country} / {args.target_year}")
+        if args.design_only:
+            print(" v3 LHS design-only generation")
+        else:
+            print(f" v3 training-data generation  --  {args.country} / {args.target_year}")
         print(f" n_lhs = {args.n_lhs}  seed = {args.seed}  "
               f"bounds = [{args.knob_lb}, {args.knob_ub}]")
         print("=" * 72)
+
+    # ── Design-only: no country data, no NemoMod init. Build the
+    # calibration plan just enough to determine the knob column set,
+    # then sample the unit-cube design and write it to --design-path.
+    if args.design_only:
+        if not args.design_path:
+            raise SystemExit("error: --design-only requires --design-path")
+        from sisepuede.calibration.build_energy_calibration_plan import (
+            build_energy_calibration_plan,
+        )
+        from sisepuede.calibration._data_generation import (
+            _load_or_sample_unit_design, DEFAULT_KNOB_PREFIX_FILTERS,
+        )
+
+        if verbose:
+            print("\n[1/2] Initialising SISEPUEDEFileStructure (no NemoMod)...")
+        file_structure   = SISEPUEDEFileStructure()
+        model_attributes = file_structure.model_attributes
+
+        if verbose:
+            print("\n[2/2] Building calibration plan + sampling design...")
+        knob_prefix_filters = args.knob_prefix or list(DEFAULT_KNOB_PREFIX_FILTERS)
+        plan = build_energy_calibration_plan(model_attributes)
+        prod_groups = [g for g in plan.groups if g.name.startswith("electout__")]
+        specs = [
+            s for g in prod_groups for s in g.specs
+            if any(s.column.startswith(p) for p in knob_prefix_filters)
+        ]
+        if not specs:
+            raise SystemExit(
+                f"error: no specs matched any prefix in {knob_prefix_filters}. "
+                f"Check --knob-prefix or the calibration plan."
+            )
+        knob_columns = [s.column for s in specs]
+        if verbose:
+            print(f"      knob prefix filters: {knob_prefix_filters}")
+            print(f"      D (num knobs)      : {len(knob_columns)}")
+            print(f"      first 3 columns    : {knob_columns[:3]}")
+
+        _load_or_sample_unit_design(
+            design_path  = args.design_path,
+            knob_columns = knob_columns,
+            n_lhs        = args.n_lhs,
+            seed         = args.seed,
+            verbose      = verbose,
+        )
+        if verbose:
+            print(f"\nDone. Design saved to: {args.design_path}")
+        return
 
     # ── Merge-only: no SISEPUEDE / NemoMod init needed, no country
     # data reload. Just walk the existing bundle's shards and assemble
