@@ -96,11 +96,12 @@ order-independent and gives each variable's Spearman score a clean
 single-variable interpretation.
 """
 
+import os
 import time
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from sisepuede.manager.sisepuede_models import SISEPUEDEModels
 from sisepuede.calibration._df_helpers import attach_year_column
@@ -804,19 +805,65 @@ class SensitivityRunner:
         )
         return df_out, df_comp
 
+    def _load_or_compute_baseline_checkpoint(self, shards_dir: str) -> None:
+        """Seed cached baseline from a checkpoint, or compute + write it.
+
+        Used by batched execution so K workers don't all pay the
+        ~90-second baseline cost. The baseline is deterministic per
+        `(df_baseline, models, include_energy_production)`, so a race
+        where two batches both write is harmless -- the second
+        overwrite is byte-identical (modulo pickle's per-write
+        randomness) and both bundles get the same downstream
+        SensitivityResult.
+        """
+        ckpt = os.path.join(shards_dir, "_baseline.pkl")
+        if os.path.exists(ckpt):
+            payload = pd.read_pickle(ckpt)
+            self._baseline_output         = payload["baseline_output"]
+            self._baseline_iea_comparison = payload["baseline_iea_comparison"]
+            print(f"  loaded baseline checkpoint -> {ckpt}")
+        else:
+            _ = self.baseline_output              # triggers the model run
+            _ = self.baseline_iea_comparison      # triggers the crosswalk build
+            _atomic_pickle_write(
+                {"baseline_output":         self._baseline_output,
+                 "baseline_iea_comparison": self._baseline_iea_comparison},
+                ckpt,
+            )
+            print(f"  wrote  baseline checkpoint -> {ckpt}")
+
     def _collect_results(
         self,
         samples_df: pd.DataFrame,
         sampling_mode: str,
         specs: List[VariableSpec],
+        shards_dir: Optional[str] = None,
     ) -> SensitivityResult:
         """Execute all rows of samples_df through the model and collect results.
 
         Prints a one-line progress update per run including elapsed time.
+
+        Parameters
+        ----------
+        shards_dir : str | None
+            When provided, per-run outputs are also persisted as pickle
+            shards named `run_{run_idx:06d}.pkl` under this directory,
+            and any run whose shard already exists is skipped. Enables
+            batched / resumable execution (see `merge_bundle_shards` in
+            `_data_generation.py`). The unperturbed baseline is stored
+            once at `{shards_dir}/_baseline.pkl` to save recomputation
+            across batches; it is loaded from there on subsequent
+            invocations rather than re-run.
         """
-        # ensure baseline is computed and cached before perturbation loop
-        _ = self.baseline_output
-        _ = self.baseline_iea_comparison
+        # Baseline: load from checkpoint when batched, else compute + cache.
+        # The baseline is a full model run (~90s); reusing it across
+        # batches avoids paying that cost K times.
+        if shards_dir is not None:
+            os.makedirs(shards_dir, exist_ok=True)
+            self._load_or_compute_baseline_checkpoint(shards_dir)
+        else:
+            _ = self.baseline_output
+            _ = self.baseline_iea_comparison
 
         all_outputs     = []
         all_comparisons = []
@@ -825,6 +872,18 @@ class SensitivityRunner:
 
         for run_idx, row in samples_df.iterrows():
             variable_scales = row.to_dict()
+
+            # Resume: skip runs whose shard file already exists. This is
+            # the only branch that reads from disk mid-loop; without a
+            # shards_dir the loop behaves exactly as before.
+            if shards_dir is not None:
+                shard_path = _shard_path(shards_dir, int(run_idx))
+                if os.path.exists(shard_path):
+                    print(
+                        f"  Run {run_idx + 1:>{len(str(n_runs))}}/{n_runs}  "
+                        f"SKIPPED (shard exists)"
+                    )
+                    continue
 
             # build a compact label for the progress line
             varying = [
@@ -889,6 +948,26 @@ class SensitivityRunner:
 
             status_row["elapsed_s"] = float(time.time() - t0)
             status_rows.append(status_row)
+
+            # Persist the per-run shard. Written after the try/except so
+            # even failed runs get a shard, which is what lets the merge
+            # step distinguish "not yet run" from "run and failed".
+            # Dataframes are None only for status == "failed"; the try
+            # branch already appended them to all_outputs/all_comparisons
+            # for both "ok" and "missing_electricity".
+            if shards_dir is not None:
+                dfs_captured = status_row["status"] != "failed"
+                shard_payload = {
+                    "run_index":      int(run_idx),
+                    "status":         status_row["status"],
+                    "elapsed_s":      status_row["elapsed_s"],
+                    "error_class":    status_row["error_class"],
+                    "error_message":  status_row["error_message"],
+                    "has_nemomod_cols": status_row["has_nemomod_cols"],
+                    "model_outputs":  all_outputs[-1]     if dfs_captured else None,
+                    "iea_comparison": all_comparisons[-1] if dfs_captured else None,
+                }
+                _atomic_pickle_write(shard_payload, _shard_path(shards_dir, int(run_idx)))
 
         run_status = pd.DataFrame(status_rows, columns=[
             "run_index", "elapsed_s", "status",
@@ -987,6 +1066,7 @@ class SensitivityRunner:
         samples_df: pd.DataFrame,
         specs: List[VariableSpec],
         sampling_mode: str = "lhs",
+        shards_dir: Optional[str] = None,
     ) -> SensitivityResult:
         """Execute a pre-built samples DataFrame through the model.
 
@@ -1007,6 +1087,11 @@ class SensitivityRunner:
         sampling_mode : str
             Stored on the resulting SensitivityResult (defaults to
             "lhs" since that's the intended use).
+        shards_dir : str | None
+            When provided, per-run outputs are persisted as pickle
+            shards under this directory and any run whose shard
+            already exists is skipped -- enables batched / resumable
+            execution.
         """
         expected = [s.column for s in specs]
         if list(samples_df.columns) != expected:
@@ -1018,7 +1103,28 @@ class SensitivityRunner:
             f"{sampling_mode.upper()}: {len(samples_df)} samples across "
             f"{len(specs)} variables (pre-built design)"
         )
-        return self._collect_results(samples_df, sampling_mode, specs)
+        return self._collect_results(samples_df, sampling_mode, specs,
+                                     shards_dir=shards_dir)
+
+
+############################
+#    SHARD I/O             #
+############################
+
+def _shard_path(shards_dir: str, run_index: int) -> str:
+    """Canonical filename for the shard of a single run."""
+    return os.path.join(shards_dir, f"run_{run_index:06d}.pkl")
+
+
+def _atomic_pickle_write(payload: Any, path: str) -> None:
+    """Write a pickle via `.tmp` + `os.replace` so a reader never sees
+    a half-written file. Safe against a crashing writer (the reader
+    just doesn't see the shard yet) and against concurrent writers of
+    the deterministic baseline checkpoint.
+    """
+    tmp = path + ".tmp"
+    pd.to_pickle(payload, tmp)
+    os.replace(tmp, path)
 
 
 ############################

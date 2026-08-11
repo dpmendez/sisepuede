@@ -62,6 +62,7 @@ from sisepuede.calibration._data_generation           import (
     DEFAULT_KNOB_BOUNDS,
     DEFAULT_KNOB_PREFIX_FILTERS,
     generate_lhs_training_data,
+    merge_bundle_shards,
 )
 
 
@@ -138,6 +139,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Batched execution.
+    p.add_argument("--n-batches", type=int, default=1,
+                   help=("Split the sweep into K contiguous batches by "
+                         "run_index. Each invocation must set "
+                         "--batch-index i for some i in [0, K); the "
+                         "worker executes runs [floor(i*N/K), floor((i+1)*N/K)) "
+                         "and writes per-run pickle shards to {bundle}/shards/. "
+                         "Default 1 = no batching."))
+    p.add_argument("--batch-index", type=int, default=None,
+                   help="0-based index of this batch. Required with --n-batches > 1.")
+    p.add_argument("--merge-only", action="store_true",
+                   help=("Skip sampling / execution and assemble a "
+                         "SensitivityResult from shards under "
+                         "{output-dir}/{iso3}_{year}_n{N}_seed{S}/shards/. "
+                         "Writes result.pkl + run_status.csv + "
+                         "metadata.json. Applies the same --min-ok-frac "
+                         "quality gate as the unbatched path."))
+
     p.add_argument("--quiet", action="store_true",
                    help="Suppress progress prints.")
     return p
@@ -153,6 +172,26 @@ def main() -> None:
         print(f" n_lhs = {args.n_lhs}  seed = {args.seed}  "
               f"bounds = [{args.knob_lb}, {args.knob_ub}]")
         print("=" * 72)
+
+    # ── Merge-only: no SISEPUEDE / NemoMod init needed, no country
+    # data reload. Just walk the existing bundle's shards and assemble
+    # result.pkl + run_status.csv + metadata.json.
+    if args.merge_only:
+        bundle_dir = os.path.join(
+            args.output_dir,
+            f"{args.country}_{args.target_year}_n{args.n_lhs}_seed{args.seed}"
+            + (f"_{args.tag}" if args.tag else ""),
+        )
+        if verbose:
+            print(f"\nmerge-only mode  --  bundle: {bundle_dir}")
+        result, metadata = merge_bundle_shards(
+            bundle_dir  = bundle_dir,
+            min_ok_frac = args.min_ok_frac,
+            verbose     = verbose,
+        )
+        if verbose:
+            print(f"\nDone. Output: {metadata.get('output_dir')}")
+        return
 
     # ── SISEPUEDE setup ─────────────────────────────────────────────────
     if verbose:
@@ -216,6 +255,8 @@ def main() -> None:
         verbose             = verbose,
         min_ok_frac         = args.min_ok_frac,
         design_path         = args.design_path,
+        n_batches           = args.n_batches,
+        batch_index         = args.batch_index,
     )
 
     if verbose:

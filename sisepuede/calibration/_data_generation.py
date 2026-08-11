@@ -98,20 +98,23 @@ def generate_lhs_training_data(
     output_dir:          Optional[str] = None,
     tag:                 str = "",
     verbose:             bool = True,
-    # Quality gate: fraction of LHS samples that must have status="ok".
-    # Refuses to persist / return when the observed rate is lower, so
-    # partial-failure sweeps (SQLite lock, silent NemoMod swallow, etc.)
-    # don't get pickled and mistaken for valid training data.
     min_ok_frac:         float = 0.95,
     # Shared LHS-design plumbing. When `design_path` is given:
     #   - if the file exists, the unit-cube [0,1]^D design is loaded from
     #     it and rescaled to `knob_bounds`; sampling is skipped.
     #   - otherwise a fresh design is sampled from `(seed, D, n_lhs)` and
-    #     written to that path so subsequent runs (other countries /
-    #     years / bound choices) can reuse the same sample points.
+    #     written to that path so subsequent runs can reuse the same sample points.
     # When `design_path` is None the design is sampled in-process and
     # not persisted separately (preserves the pre-refactor behaviour).
     design_path:         Optional[str] = None,
+    # Batching. n_batches=1 (default) runs the full N in-process,
+    # n_batches > 1 with batch_index in [0, K) runs only the contiguous 
+    # slice [floor(i*N/K), floor((i+1)*N/K)) of run_index values,
+    # writes per-run pickle shards under {bundle}/shards/, and skips
+    # result.pkl persistence -- the merge step (see `merge_bundle_shards`)
+    # assembles the final artifacts from shards after all batches complete.
+    n_batches:           int = 1,
+    batch_index:         Optional[int] = None,
 ) -> Tuple[SensitivityResult, Dict[str, Any]]:
     """Run an LHS sweep on SISEPUEDE and return (SensitivityResult, metadata).
 
@@ -233,6 +236,63 @@ def generate_lhs_training_data(
         columns=knob_columns,
     ).reset_index(drop=True)
 
+    # ── Batching: slice samples_df to the runs this invocation owns.
+    # For the default n_batches=1, `batch_slice` is the whole design
+    # For n_batches > 1 we slice contiguously by run_index; the merge step
+    # re-assembles.
+    batch_slice = _batch_run_indices(n_lhs, n_batches, batch_index)
+    is_batched  = n_batches > 1 or batch_index is not None
+    if is_batched:
+        samples_df = samples_df.iloc[list(batch_slice)]
+        if verbose:
+            print(f"  batch               : "
+                  f"index={batch_index} / {n_batches}  "
+                  f"runs=[{batch_slice.start}, {batch_slice.stop})  "
+                  f"n={len(samples_df)}")
+
+    # Shards directory lives inside the bundle. We need `output_dir`
+    # for batched mode so shards from parallel workers land in the
+    # same place -- refuse the request rather than silently discard
+    # per-run data to an in-memory-only run.
+    shards_dir: Optional[str] = None
+    if is_batched:
+        if output_dir is None:
+            raise ValueError(
+                "generate_lhs_training_data: batched execution "
+                "(n_batches > 1 or batch_index != None) requires "
+                "output_dir so per-run shards can be written to "
+                "{output_dir}/{iso3}_{year}_n{N}_seed{S}/shards/."
+            )
+        bundle_dir = _build_output_subdir(
+            output_dir, iso_country, target_year, n_lhs, seed, tag,
+        )
+        shards_dir = os.path.join(bundle_dir, "shards")
+        os.makedirs(shards_dir, exist_ok=True)
+
+        # Write baseline.pkl + a stub metadata.json now so the merge
+        # step (which may run later, on a different machine) has
+        # everything it needs. "Stub" = same shape as the final
+        # metadata but without batch-crosscutting counts; the merge
+        # rewrites it with final totals.
+        _write_bundle_stubs(
+            bundle_dir      = bundle_dir,
+            df_input_energy = df_input_energy,
+            iso_country     = iso_country,
+            target_year     = target_year,
+            n_lhs           = n_lhs,
+            seed            = seed,
+            lb              = lb,
+            ub              = ub,
+            knob_prefix_filters = knob_prefix_filters,
+            spec_columns    = knob_columns,
+            year_min        = year_min,
+            year_max        = year_max,
+            n_batches       = n_batches,
+            design_source   = design_source,
+            tag             = tag,
+            verbose         = verbose,
+        )
+
     # ── Run the sweep
     runner = SensitivityRunner(
         models                    = models,
@@ -244,9 +304,35 @@ def generate_lhs_training_data(
         year_min                  = year_min,
         year_max                  = year_max,
     )
-    result = runner.run_samples(samples_df, specs)
+    result = runner.run_samples(samples_df, specs, shards_dir=shards_dir)
 
     wall_clock = time.time() - t0
+
+    # In batched mode this invocation only produces shards. The quality
+    # gate, result.pkl persistence, and full-metadata write happen at
+    # merge time (`merge_bundle_shards`), when all shards are on disk.
+    if is_batched:
+        batch_metadata = {
+            "iso_country":  iso_country,
+            "target_year":  target_year,
+            "batch_index":  int(batch_index),
+            "n_batches":    int(n_batches),
+            "run_indices":  [int(i) for i in batch_slice],
+            "n_ok":         int((result.run_status["status"] == "ok").sum())
+                                if result.run_status is not None else 0,
+            "wall_clock_seconds": float(wall_clock),
+            "generated_at": datetime.datetime.now(datetime.timezone.utc)
+                                .isoformat(timespec="seconds"),
+            "git_commit":   _git_commit_hash(),
+            "shards_dir":   shards_dir,
+        }
+        if verbose:
+            print(f"  batch done          : wall={wall_clock:.1f}s  "
+                  f"ok={batch_metadata['n_ok']}/{len(batch_slice)}")
+            print(f"  shards written to   : {shards_dir}")
+            print("  (merge with: python -m sisepuede.calibration."
+                  "generate_surrogate_data --merge-only ...)")
+        return result, batch_metadata
 
     # ── Quality gate: check per-sample success rate before persisting
     status = result.run_status
@@ -376,6 +462,283 @@ def _persist_artifacts(
 
 def _file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024.0 * 1024.0)
+
+
+def _batch_run_indices(
+    n_total:     int,
+    n_batches:   int,
+    batch_index: Optional[int],
+) -> range:
+    """Return the contiguous slice of run_index this batch owns.
+
+    n_batches=1 (with batch_index None or 0) yields range(0, n_total),
+    which makes the single-batch code path byte-identical to today.
+    Otherwise batch_index in [0, n_batches) selects
+    range(floor(i*N/K), floor((i+1)*N/K)).
+
+    Chosen contiguous over round-robin because a bundle owner reasons
+    about "runs 500-999 are batch 2" more readily than about a stride.
+    Since we concatenate every shard at merge time, the training set
+    is identical either way.
+    """
+    if n_batches < 1:
+        raise ValueError(f"_batch_run_indices: n_batches must be >= 1, got {n_batches}")
+    if n_batches == 1 and batch_index in (None, 0):
+        return range(0, n_total)
+    if batch_index is None:
+        raise ValueError(
+            "_batch_run_indices: batch_index must be provided when n_batches > 1."
+        )
+    if not (0 <= batch_index < n_batches):
+        raise ValueError(
+            f"_batch_run_indices: batch_index must be in [0, {n_batches}), "
+            f"got {batch_index}."
+        )
+    start = (batch_index       * n_total) // n_batches
+    stop  = ((batch_index + 1) * n_total) // n_batches
+    return range(start, stop)
+
+
+def _write_bundle_stubs(
+    *,
+    bundle_dir:      str,
+    df_input_energy: pd.DataFrame,
+    iso_country:     str,
+    target_year:     int,
+    n_lhs:           int,
+    seed:            int,
+    lb:              float,
+    ub:              float,
+    knob_prefix_filters: List[str],
+    spec_columns:    List[str],
+    year_min:        int,
+    year_max:        int,
+    n_batches:       int,
+    design_source:   Dict[str, Any],
+    tag:             str,
+    verbose:         bool,
+) -> None:
+    """Write baseline.pkl + a stub metadata.json for a batched bundle.
+
+    Idempotent: skips files that already exist so a later batch does
+    not clobber whatever the first batch wrote. All batches derive
+    the same stub content from their inputs, so any of them can be
+    the first writer.
+    """
+    baseline_path = os.path.join(bundle_dir, "baseline.pkl")
+    metadata_path = os.path.join(bundle_dir, "metadata.json")
+
+    if not os.path.exists(baseline_path):
+        pd.to_pickle(df_input_energy, baseline_path)
+        if verbose:
+            print(f"  wrote baseline.pkl (stub) -> {baseline_path}")
+
+    if not os.path.exists(metadata_path):
+        stub = {
+            "iso_country":              iso_country,
+            "target_year":              target_year,
+            "n_lhs":                    int(n_lhs),
+            "seed":                     int(seed),
+            "knob_prefix_filters":      list(knob_prefix_filters),
+            "knob_bounds":              [float(lb), float(ub)],
+            "n_specs":                  len(spec_columns),
+            "spec_columns":             list(spec_columns),
+            "year_min":                 int(year_min),
+            "year_max":                 int(year_max),
+            "consumption_fingerprint":  fingerprint_consumption_state(df_input_energy),
+            "generated_at":             datetime.datetime.now(datetime.timezone.utc)
+                                            .isoformat(timespec="seconds"),
+            "python_version":           sys.version.split()[0],
+            "git_commit":               _git_commit_hash(),
+            "tag":                      tag,
+            "design_path":              design_source["path"],
+            "design_source":            design_source["source"],
+            "design_hash":              design_source["hash"],
+            # Stub -- the merge step overwrites this with n_ok, n_fail,
+            # wall_clock summed across batches, etc.
+            "batches":                  {"n_batches": int(n_batches)},
+        }
+        with open(metadata_path, "w") as fp:
+            json.dump(stub, fp, indent=2, sort_keys=True)
+        if verbose:
+            print(f"  wrote metadata.json (stub) -> {metadata_path}")
+
+
+def merge_bundle_shards(
+    bundle_dir: str,
+    *,
+    min_ok_frac: float = 0.95,
+    verbose:     bool  = True,
+) -> Tuple[SensitivityResult, Dict[str, Any]]:
+    """Assemble the shards a batched sweep produced into a single
+    SensitivityResult and write the final bundle artifacts.
+
+    Reads:
+      {bundle}/shards/_baseline.pkl         (from the first batch)
+      {bundle}/shards/run_{run_idx:06d}.pkl (one per completed run)
+      {bundle}/design.csv                   (for input_samples)
+      {bundle}/metadata.json                (partial provenance from the
+                                            first batch; we overwrite it
+                                            with a full-bundle version)
+      {bundle}/baseline.pkl                 (the post-v2 input frame,
+                                            written by whichever batch
+                                            ran first)
+
+    Writes:
+      {bundle}/result.pkl                   SensitivityResult
+      {bundle}/run_status.csv               per-run status frame
+      {bundle}/metadata.json                merged provenance including
+                                            wall_clock (sum across
+                                            batches), n_lhs, and the
+                                            merge quality-gate outcome.
+
+    Applies the same `min_ok_frac` quality gate as the unbatched path;
+    refuses to write `result.pkl` when the gate fails (run_status.csv
+    is still written for diagnostics).
+    """
+    import glob
+    shards_dir  = os.path.join(bundle_dir, "shards")
+    baseline_ck = os.path.join(shards_dir, "_baseline.pkl")
+    design_path = os.path.join(bundle_dir, "design.csv")
+
+    for p in (shards_dir, baseline_ck, design_path):
+        if not os.path.exists(p):
+            raise FileNotFoundError(
+                f"merge_bundle_shards: expected {p!r} to exist. Either "
+                f"no batch has run yet or the bundle layout is corrupt."
+            )
+
+    # Load the design so input_samples can be reconstructed. We rescale
+    # here rather than storing scaled samples in each shard.
+    unit = pd.read_csv(design_path)
+    n_lhs = len(unit)
+
+    # Read all shards, sorted by run_index.
+    shard_paths = sorted(glob.glob(os.path.join(shards_dir, "run_*.pkl")))
+    if verbose:
+        print(f"  merging {len(shard_paths)} shards from {shards_dir}")
+
+    all_outputs, all_comparisons, status_rows = [], [], []
+    seen_indices = set()
+    for sp in shard_paths:
+        payload = pd.read_pickle(sp)
+        ri = int(payload["run_index"])
+        if ri in seen_indices:
+            raise RuntimeError(f"duplicate shard for run_index {ri}: {sp}")
+        seen_indices.add(ri)
+        status_rows.append({
+            "run_index":         ri,
+            "elapsed_s":         float(payload["elapsed_s"]),
+            "status":            payload["status"],
+            "error_class":       payload["error_class"],
+            "error_message":     payload["error_message"],
+            "has_nemomod_cols":  bool(payload["has_nemomod_cols"]),
+        })
+        if payload["model_outputs"] is not None:
+            all_outputs.append(payload["model_outputs"])
+            all_comparisons.append(payload["iea_comparison"])
+
+    if not seen_indices:
+        raise RuntimeError(
+            f"merge_bundle_shards: no shards found in {shards_dir}. "
+            f"Run at least one batch before merging."
+        )
+
+    missing = set(range(n_lhs)) - seen_indices
+    if missing:
+        # Not necessarily fatal -- the caller may know some batches are
+        # still running -- but the quality gate below will typically
+        # reject anyway. Print prominently.
+        print(f"  WARNING: {len(missing)} of {n_lhs} runs have no shard "
+              f"(first few missing: {sorted(missing)[:5]})")
+
+    # Rebuild the SensitivityResult. The specs list is not persisted
+    # in shards -- it lives in bundle metadata (spec_columns + bounds).
+    # We reconstruct enough of it for downstream training code (which
+    # reads result.input_samples / result.model_outputs and does not
+    # touch variable_specs).
+    with open(os.path.join(bundle_dir, "metadata.json")) as fp:
+        old_meta = json.load(fp)
+    knob_columns = list(old_meta["spec_columns"])
+    lb, ub = old_meta["knob_bounds"]
+    specs = [
+        VariableSpec(column=c, lb=float(lb), ub=float(ub))
+        for c in knob_columns
+    ]
+    samples_df = pd.DataFrame(
+        lhs_scale(unit.values, np.full(len(specs), float(lb)),
+                                np.full(len(specs), float(ub))),
+        columns=knob_columns,
+    ).reset_index(drop=True)
+
+    baseline_payload = pd.read_pickle(baseline_ck)
+
+    run_status_df = pd.DataFrame(status_rows, columns=[
+        "run_index", "elapsed_s", "status",
+        "error_class", "error_message", "has_nemomod_cols",
+    ]).sort_values("run_index").reset_index(drop=True)
+
+    empty_out  = pd.DataFrame({"run_index": pd.Series(dtype=int)})
+    empty_comp = pd.DataFrame({"run_index": pd.Series(dtype=int)})
+    result = SensitivityResult(
+        variable_specs          = specs,
+        sampling_mode           = "lhs",
+        input_samples           = samples_df,
+        iea_comparison          = (pd.concat(all_comparisons, ignore_index=True)
+                                   if all_comparisons else empty_comp),
+        model_outputs           = (pd.concat(all_outputs, ignore_index=True)
+                                   if all_outputs else empty_out),
+        baseline_output         = baseline_payload["baseline_output"].copy(),
+        baseline_iea_comparison = baseline_payload["baseline_iea_comparison"].copy(),
+        run_status              = run_status_df,
+    )
+
+    # Quality gate at merge time.
+    n_total   = len(run_status_df)
+    n_ok      = int((run_status_df["status"] == "ok").sum())
+    n_fail    = int((run_status_df["status"] == "failed").sum())
+    n_missing = int((run_status_df["status"] == "missing_electricity").sum())
+    ok_frac   = n_ok / n_total if n_total else 0.0
+    if verbose:
+        print(f"  merged runs         : {n_ok}/{n_total} ok, "
+              f"{n_fail} failed, {n_missing} missing electricity  "
+              f"(min_ok_frac={min_ok_frac:.2f})")
+
+    # Always write run_status.csv so a failed gate leaves diagnostics behind.
+    run_status_df.to_csv(os.path.join(bundle_dir, "run_status.csv"), index=False)
+
+    if ok_frac < min_ok_frac:
+        raise RuntimeError(
+            f"merge_bundle_shards: gate failed. Only {n_ok}/{n_total} "
+            f"samples succeeded ({ok_frac:.1%} < {min_ok_frac:.0%}). "
+            f"See {bundle_dir}/run_status.csv for the per-sample breakdown."
+        )
+
+    # Refresh metadata with merge-time totals. We keep whatever the
+    # first batch wrote (design_hash, consumption_fingerprint, ...) and
+    # replace the batch-specific fields.
+    metadata = dict(old_meta)
+    metadata["n_ok"]           = n_ok
+    metadata["n_fail"]         = n_fail
+    metadata["n_missing"]      = n_missing
+    metadata["merged_at"]      = datetime.datetime.now(datetime.timezone.utc) \
+                                    .isoformat(timespec="seconds")
+    metadata["merge_git_commit"] = _git_commit_hash()
+    metadata["batches"] = {
+        "n_batches":     old_meta.get("batches", {}).get("n_batches"),
+        "shards_merged": n_total,
+        "runs_missing":  sorted(missing),
+    }
+    metadata["output_dir"] = bundle_dir
+
+    pd.to_pickle(result, os.path.join(bundle_dir, "result.pkl"))
+    with open(os.path.join(bundle_dir, "metadata.json"), "w") as fp:
+        json.dump(metadata, fp, indent=2, sort_keys=True)
+
+    if verbose:
+        print(f"  wrote result.pkl and metadata.json under {bundle_dir}")
+
+    return result, metadata
 
 
 def _load_or_sample_unit_design(
