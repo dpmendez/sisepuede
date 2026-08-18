@@ -1,5 +1,6 @@
 geopandas==1.0.1
 geopy==2.1.0
+joblib==1.4.2
 juliacall==0.9.25
 juliapkg==0.1.17
 jupyterlab==4.4.1
@@ -15,4 +16,7 @@ cvxpy==1.6.5
 qpsolvers==4.4.0
 quadprog==0.1.13
 rioxarray==0.15.5
+scikit-learn==1.5.2
+scipy==1.14.1
+seaborn==0.13.2
 SQLAlchemy==2.0.37
