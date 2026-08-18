@@ -41,10 +41,13 @@ import argparse
 import os
 import sys
 import warnings
+from pathlib import Path
 
-_REPO_ROOT = "/Users/dianamendez/feature-energy-calibration"
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Repo root = two levels up from this file (…/sisepuede/calibration/<this>.py).
+# Derived from __file__ so the script is portable across machines.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 warnings.filterwarnings("ignore")
 
@@ -67,12 +70,19 @@ from sisepuede.calibration._data_generation           import (
 
 
 # ── Default paths (override on the command line) ──────────────────────────
-DEFAULT_CALIBRATED_INPUT = "/Users/dianamendez/sisepuede-data/input_data_peru_base.csv"
-DEFAULT_IEA_DATA_DIR     = "/Users/dianamendez/data_collection_temporary"
-DEFAULT_CROSSWALK_FILE   = (
-    f"{_REPO_ROOT}/sisepuede/ref/data_crosswalks/sisepuede_iea_energy_crosswalk.csv"
+# External inputs come from env vars; the crosswalk ships with the repo, so
+# its default is derived from the repo root. Training output falls back to
+# $SISEPUEDE_TRAINING_DIR and, if that's unset, to an in-repo default.
+DEFAULT_CALIBRATED_INPUT = "input_data_per_calibrated.csv"
+DEFAULT_IEA_DATA_DIR     = os.environ.get("IEA_DATA_DIR")
+DEFAULT_CROSSWALK_FILE   = str(
+    _REPO_ROOT / "sisepuede" / "ref" / "data_crosswalks"
+    / "sisepuede_iea_energy_crosswalk.csv"
 )
-DEFAULT_OUTPUT_DIR       = f"{_REPO_ROOT}/sisepuede/out/training_data"
+DEFAULT_OUTPUT_DIR       = os.environ.get(
+    "SISEPUEDE_TRAINING_DIR",
+    str(_REPO_ROOT / "sisepuede" / "out" / "training_data"),
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -109,13 +119,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--knob-ub", type=float, default=DEFAULT_KNOB_BOUNDS[1],
                    help=f"Scale-factor upper bound (default: {DEFAULT_KNOB_BOUNDS[1]}).")
 
-    # Paths.
+    # Paths. External locations fall back to env vars ($IEA_DATA_DIR,
+    # $SISEPUEDE_TRAINING_DIR); the IEA dir is required if neither the flag
+    # nor the env var is set.
     p.add_argument("--calibrated-input", type=str, default=DEFAULT_CALIBRATED_INPUT,
                    help="Path to the post-v2 calibrated SSP input CSV.")
-    p.add_argument("--iea-data-dir",     type=str, default=DEFAULT_IEA_DATA_DIR)
-    p.add_argument("--crosswalk-file",   type=str, default=DEFAULT_CROSSWALK_FILE)
+    p.add_argument("--iea-data-dir",     type=str, default=DEFAULT_IEA_DATA_DIR,
+                   required=DEFAULT_IEA_DATA_DIR is None,
+                   help="Directory holding the IEA energy balance files (env: IEA_DATA_DIR).")
+    p.add_argument("--crosswalk-file",   type=str, default=DEFAULT_CROSSWALK_FILE,
+                   help="Path to the IEA-SISEPUEDE crosswalk CSV "
+                        "(default: repo copy under sisepuede/ref/data_crosswalks/).")
     p.add_argument("--output-dir",       type=str, default=DEFAULT_OUTPUT_DIR,
-                   help="Where the training-data subdirectory is written.")
+                   help=("Where the training-data subdirectory is written "
+                         "(env: SISEPUEDE_TRAINING_DIR; default: repo "
+                         "sisepuede/out/training_data/)."))
     p.add_argument("--tag",              type=str, default="",
                    help="Optional suffix appended to the output subdirectory name.")
 

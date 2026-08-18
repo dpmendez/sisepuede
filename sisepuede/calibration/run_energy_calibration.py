@@ -15,23 +15,30 @@ the development paths used in ``energy_calibration.ipynb``.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 
-_REPO_ROOT = "/Users/dianamendez/feature-energy-calibration"
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Repo root = two levels up from this file (…/sisepuede/calibration/<this>.py).
+# Derived from __file__ so the script is portable across machines.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from sisepuede.calibration.energy_calibration import energy_calibration
 
 
-# ── Default paths (override on the command line if needed) ────────────────────
-DEFAULT_SISEPUEDE_INPUT = "/Users/dianamendez/sisepuede-calibration-in/input_data_peru_base.csv"
-DEFAULT_IEA_DATA_DIR    = "/Users/dianamendez/data_collection_temporary"
-DEFAULT_CROSSWALK_FILE  = (
-    "/Users/dianamendez/feature-energy-calibration/"
-    "sisepuede/ref/data_crosswalks/sisepuede_iea_energy_crosswalk.csv"
+# ── Default paths ─────────────────────────────────────────────────────────────
+# External inputs/outputs live outside the repo, so they come from env vars
+# (override on the command line to bypass). The crosswalk ships with the repo,
+# so its default is derived from the repo root.
+DEFAULT_SISEPUEDE_INPUT = "input_data_peru_base.csv"
+DEFAULT_IEA_DATA_DIR    = os.environ.get("IEA_DATA_DIR")
+DEFAULT_OUTPUT_DIR      = os.environ.get("SISEPUEDE_OUTPUT_DIR")
+DEFAULT_CROSSWALK_FILE  = str(
+    _REPO_ROOT / "sisepuede" / "ref" / "data_crosswalks"
+    / "sisepuede_iea_energy_crosswalk.csv"
 )
-DEFAULT_OUTPUT_DIR      = "/Users/dianamendez/sisepuede-calibration-out"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -92,15 +99,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--iea-year-limit", type=int, default=2022,
                    help="Drop input rows beyond this year before calibrating (default: 2022).")
 
-    # Paths
+    # Paths. External locations fall back to env vars ($SISEPUEDE_INPUT,
+    # $IEA_DATA_DIR, $SISEPUEDE_OUTPUT_DIR); if neither the flag nor the env
+    # var is set, the argument is required.
     p.add_argument("--sisepuede-input", type=str, default=DEFAULT_SISEPUEDE_INPUT,
                    help="Path to the SISEPUEDE input CSV.")
     p.add_argument("--iea-data-dir",    type=str, default=DEFAULT_IEA_DATA_DIR,
-                   help="Directory holding the IEA energy balance files.")
+                   required=DEFAULT_IEA_DATA_DIR is None,
+                   help="Directory holding the IEA energy balance files (env: IEA_DATA_DIR).")
     p.add_argument("--crosswalk-file",  type=str, default=DEFAULT_CROSSWALK_FILE,
-                   help="Path to the IEA-SISEPUEDE crosswalk CSV.")
+                   help="Path to the IEA-SISEPUEDE crosswalk CSV "
+                        "(default: repo copy under sisepuede/ref/data_crosswalks/).")
     p.add_argument("--output-dir",      type=str, default=DEFAULT_OUTPUT_DIR,
-                   help="Directory where outputs (plots/, tables/, CSVs) are written.")
+                   required=DEFAULT_OUTPUT_DIR is None,
+                   help="Directory where outputs (plots/, tables/, CSVs) are written "
+                        "(env: SISEPUEDE_OUTPUT_DIR).")
 
     # v3 (cal-option 5) arguments
     p.add_argument("--surrogate", type=str, default=None,

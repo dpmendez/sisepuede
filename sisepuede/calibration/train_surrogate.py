@@ -36,10 +36,13 @@ import argparse
 import os
 import sys
 import warnings
+from pathlib import Path
 
-_REPO_ROOT = "/Users/dianamendez/feature-energy-calibration"
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Repo root = two levels up from this file (…/sisepuede/calibration/<this>.py).
+# Derived from __file__ so the script is portable across machines.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 warnings.filterwarnings("ignore")
 
@@ -54,10 +57,17 @@ from sisepuede.calibration._training_pipeline import (
 
 
 # ── Default paths (override on the command line) ──────────────────────────
-DEFAULT_CROSSWALK_FILE = (
-    f"{_REPO_ROOT}/sisepuede/ref/data_crosswalks/sisepuede_iea_energy_crosswalk.csv"
+# Crosswalk ships with the repo, so its default is derived from the repo root.
+# Surrogate output falls back to the env var $SISEPUEDE_SURROGATE_DIR and, if
+# that's unset, to an in-repo default under sisepuede/out/surrogates/.
+DEFAULT_CROSSWALK_FILE = str(
+    _REPO_ROOT / "sisepuede" / "ref" / "data_crosswalks"
+    / "sisepuede_iea_energy_crosswalk.csv"
 )
-DEFAULT_OUTPUT_DIR = f"{_REPO_ROOT}/sisepuede/out/surrogates"
+DEFAULT_OUTPUT_DIR = os.environ.get(
+    "SISEPUEDE_SURROGATE_DIR",
+    str(_REPO_ROOT / "sisepuede" / "out" / "surrogates"),
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -110,7 +120,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--split-seed",  type=int,   default=42)
 
     # Output.
-    p.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR)
+    p.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR,
+                   help=("Directory where the fitted surrogate bundle is written "
+                         "(env: SISEPUEDE_SURROGATE_DIR; default: repo "
+                         "sisepuede/out/surrogates/)."))
     p.add_argument("--tag",        type=str, default="",
                    help="Optional suffix appended to the output subdirectory name.")
 
