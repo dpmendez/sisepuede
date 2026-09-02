@@ -158,11 +158,32 @@ _ISO_TO_IEA_FILENAME: Dict[str, str] = {
 ##                       "fixed"            — both balance_fixed and product_fixed set (B)
 ##    balance_prefix : prefix for imports_exports mode (e.g. "COAL" -> COALIMPORTS)
 _FOLDER_CONFIG: Dict[str, Dict] = {
-    # "total_energy_supply": {
-    #     "format":         "A",
-    #     "balance_fixed":  "INDPROD",
-    #     "mode":           "product_from_row",
-    # },
+    # IEA's Total Energy Supply (TES) aggregate:
+    # primary-energy availability per fuel = indigenous production + imports - exports. 
+    "total_energy_supply": {
+        "format":         "A",
+        "balance_fixed":  "TES",
+        "mode":           "product_from_row",
+    },
+    # Per-fuel indigenous production folders.
+    "coal_production": {
+        "format":         "B",
+        "balance_fixed":  "FUELPROD",
+        "product_fixed":  "COAL",
+        "mode":           "fixed",
+    },
+    "crude_oil_production": {
+        "format":         "B",
+        "balance_fixed":  "FUELPROD",
+        "product_fixed":  "CRUDE",
+        "mode":           "fixed",
+    },
+    "natural_gas_production": {
+        "format":         "B",
+        "balance_fixed":  "FUELPROD",
+        "product_fixed":  "NATGAS",
+        "mode":           "fixed",
+    },
     "total_final_energy_consumption": {
         "format":         "A",
         "balance_fixed":  None,
@@ -223,13 +244,7 @@ _FOLDER_CONFIG: Dict[str, Dict] = {
         "mode":           "imports_exports",
         "balance_prefix": "",          # -> IMPORTS / EXPORTS (no prefix)
     },
-    # Production folders (coal_production, crude_oil_production,
-    # natural_gas_production) are omitted here.  Each gives only domestic
-    # production for a single fuel; the total_energy_supply folder already
-    # covers the same (INDPROD, product) pairs at the TES level.  Including
-    # both would create duplicate rows for (INDPROD, COAL/OIL/NATGAS).
-    #
-    # Folders not in the crosswalk — also skipped:
+    # Folders not in the crosswalk — skipped:
     #   total_oil_products_refined, electricity_final_consumption_by_sector
 }
 

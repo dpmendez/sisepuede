@@ -19,7 +19,7 @@ matching the grouping structure below (one section per row):
   7    frac_scoe_residential         Residential TFC by fuel
   8    frac_scoe_commercial_muni     Commercial/public TFC by fuel
 
-Groups 1–5 target aggregate IEA pairs (INDPROD x fuel, sector x sector,
+Groups 1–5 target aggregate IEA pairs (TES x fuel, sector x sector,
 ELECTOUT x fuel, COALIMPORTS x IMPORTS, …).  Groups 6–8 target fuel-mix pairs
 (INDUSTRY x COAL, RESIDENT x ELECTR, …) and use simplex-constrained fracs.
 

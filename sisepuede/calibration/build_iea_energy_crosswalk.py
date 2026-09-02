@@ -283,15 +283,17 @@ class IEACrosswalkBuilder:
     def _rows_supply(self) -> List[Dict[str, Any]]:
         """
         Build crosswalk rows for the Energy Supply section.
-        IEA balance: INDPROD (Indigenous Production / Total Energy Supply).
-        # SISEPUEDE variable: Fuel Production.
-        SISEPUEDE variable: Total Energy Demand by Fuel.
+
+        IEA balance: TES (Total Energy Supply)
+        primary-energy availabilityper fuel = indigenous production + imports - exports 
+
+        # SISEPUEDE variable: Total Energy Demand by Fuel.
         """
 
         rows = self._section("ENERGY SUPPLY")
 
-        # prod_var = "Fuel Production"
-        prod_var = "Total Energy Demand by Fuel"
+        prod_var = "Total Energy Demand by Fuel" # TO DO: Correct computation of TES
+        # TES = Fuel Production + Fuel Imports - Adjusted Fuel Exports 
 
         for product_code, product_name, fuel_cats, agg, quality, notes in [
             (
@@ -364,11 +366,46 @@ class IEACrosswalkBuilder:
             # ),
         ]:
             rows.append(self._row(
-                "INDPROD", "Total energy supply",
+                "TES", "Total energy supply",
                 product_code, product_name,
                 "enfu",
                 self._fields_for(prod_var, fuel_cats),
                 agg, "PJ", 1000, quality, notes,
+            ))
+
+        return rows
+
+
+    def _rows_fuel_production(self) -> List[Dict[str, Any]]:
+        """
+        Build crosswalk rows for indigenous per-fuel production.
+
+        IEA balance: FUELPROD. Sourced from the `coal_production/`,
+        `crude_oil_production/`, `natural_gas_production/` folders in the
+        IEA data repository.
+        """
+
+        rows = self._section("INDIGENOUS FUEL PRODUCTION")
+
+        prod_var = "Fuel Production"
+
+        for product_code, product_name, ssp_field, quality, notes in [
+            ("COAL",   "Coal",        "prod_enfu_fuel_coal_pj",
+             "exact", ""),
+            ("CRUDE",  "Crude oil",   "prod_enfu_fuel_crude_pj",
+             "approximate",
+             "IEA `crude_oil_production` is crude only; SISEPUEDE `fuel_crude` "
+             "is the closest analog -- NGLs and refined products are tracked "
+             "in separate SSP fuels and are not included."),
+            ("NATGAS", "Natural gas", "prod_enfu_fuel_natural_gas_pj",
+             "exact", ""),
+        ]:
+            rows.append(self._row(
+                "FUELPROD", "Indigenous fuel production",
+                product_code, product_name,
+                "enfu",
+                [ssp_field],
+                "direct", "PJ", 1000, quality, notes,
             ))
 
         return rows
@@ -1030,7 +1067,8 @@ class IEACrosswalkBuilder:
         ##  ASSEMBLE ALL SECTIONS
 
         all_rows: List[Dict[str, Any]] = []
-        # all_rows += self._rows_supply() # keep commented out until clarifying what variables this exactly maps to
+        all_rows += self._rows_supply()             # (TES, product) -> demand-by-fuel # TODO: Correct computation of TES
+        all_rows += self._rows_fuel_production()    # (FUELPROD, product) -> prod_enfu_fuel_*
         all_rows += self._rows_imports_exports()
         all_rows += self._rows_electricity_generation()
         all_rows += self._rows_tfc_by_sector()
