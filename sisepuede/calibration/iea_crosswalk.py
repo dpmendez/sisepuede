@@ -46,6 +46,31 @@ _GWH_TO_TJ  = 3.6      # 1 GWh  = 3.6   TJ
 _KTOE_TO_TJ = 41.868   # 1 ktoe = 41.868 TJ
 
 
+def _parse_signed_fields(raw: str) -> List[Tuple[str, int]]:
+    """Parse the `sisepuede_output_variables` cell into (field, sign) pairs.
+
+    Convention: a `-` prefix on a field name means "subtract this field
+    from the aggregate"; no prefix means "add".
+
+    Returns
+    -------
+    List[Tuple[str, int]]
+        Each tuple is (field_name_without_sign, +1 | -1).
+    """
+    out: List[Tuple[str, int]] = []
+    for tok in str(raw).split(_VAR_SEP):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.startswith("-"):
+            name = tok[1:].strip()
+            if name:
+                out.append((name, -1))
+        else:
+            out.append((tok, +1))
+    return out
+
+
 
 ####################
 #    PRIMARY CLASS #
@@ -266,23 +291,27 @@ class IEACrosswalk:
         ]
 
         for _, xw_row in self.df_crosswalk.iterrows():
-             
-            ## PARSE VARIABLE LIST
 
-            vars_requested = [
-                v.strip()
-                for v in str(xw_row["sisepuede_output_variables"]).split(_VAR_SEP)
-                if v.strip()
+            ## PARSE VARIABLE LIST (signed: -field = subtract)
+
+            signed_requested = _parse_signed_fields(
+                xw_row["sisepuede_output_variables"]
+            )
+            signed_found = [
+                (v, s) for (v, s) in signed_requested if v in available_cols
             ]
-            vars_found = [v for v in vars_requested if v in available_cols]
 
-            if not vars_found:
+            if not signed_found:
                 continue
-             
-            ## AGREGATE AND CONVERT
 
-            df_agg = df_sisepuede[[col_year] + vars_found].copy()
-            df_agg["value_sisepuede"] = df_agg[vars_found].sum(axis=1)
+            ## AGREGATE (signed) AND CONVERT
+
+            fields = [v for v, _ in signed_found]
+            signs  = np.array([s for _, s in signed_found], dtype=float)
+            df_agg = df_sisepuede[[col_year] + fields].copy()
+            df_agg["value_sisepuede"] = (
+                df_agg[fields].to_numpy(dtype=float) @ signs
+            )
 
             conv = float(xw_row["unit_conversion_to_tj"])
             df_agg["value_sisepuede_tj"] = df_agg["value_sisepuede"] * conv
@@ -291,8 +320,10 @@ class IEACrosswalk:
 
             for col in meta_cols:
                 df_agg[col] = xw_row[col]
-            
-            df_agg["sisepuede_vars_used"] = _VAR_SEP.join(vars_found)
+
+            df_agg["sisepuede_vars_used"] = _VAR_SEP.join(
+                (f"-{v}" if s < 0 else v) for v, s in signed_found
+            )
 
             rows.append(
                  df_agg[
@@ -487,11 +518,12 @@ class IEACrosswalk:
 
         row = matches.iloc[0].copy()
 
-        # Attach a parsed field list as a convenience attribute
+        # Attach both a plain field list (backward-compat: names only,
+        # signs stripped) and the signed pairs.
         raw = str(row.get("sisepuede_output_variables", ""))
-        row["ssp_fields"] = [
-            v.strip() for v in raw.split(_VAR_SEP) if v.strip()
-        ]
+        signed = _parse_signed_fields(raw)
+        row["ssp_fields_signed"] = signed
+        row["ssp_fields"]        = [v for v, _ in signed]
 
         return row
 

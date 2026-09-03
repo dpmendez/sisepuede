@@ -284,16 +284,25 @@ class IEACrosswalkBuilder:
         """
         Build crosswalk rows for the Energy Supply section.
 
-        IEA balance: TES (Total Energy Supply)
-        primary-energy availabilityper fuel = indigenous production + imports - exports 
+        IEA balance: TES (Total Energy Supply). Primary-energy availability
+        per fuel:
 
-        # SISEPUEDE variable: Total Energy Demand by Fuel.
+            TES = Fuel Production + Fuel Imports - Adjusted Fuel Exports
+
+        Written as a signed sum on the crosswalk row (`-field` prefix
+        means "subtract"; consumed by IEACrosswalk._parse_signed_fields).
+        Rows are emitted only for fuels that have all three SSP fields
+        present in the model schema (fossil fuels COAL / NATGAS / OIL);
+        for renewables SISEPUEDE has no `prod_enfu_fuel_*` / `imports_*`
+        / `exportsadj_*` fields, so those rows would be empty and get
+        dropped downstream by `aggregate_sisepuede`.
         """
 
         rows = self._section("ENERGY SUPPLY")
 
-        prod_var = "Total Energy Demand by Fuel" # TO DO: Correct computation of TES
-        # TES = Fuel Production + Fuel Imports - Adjusted Fuel Exports 
+        prod_var = "Fuel Production"
+        imp_var  = "Fuel Imports"
+        exp_var  = "Adjusted Fuel Exports"
 
         for product_code, product_name, fuel_cats, agg, quality, notes in [
             (
@@ -365,11 +374,32 @@ class IEACrosswalkBuilder:
             #     "Ammonia not tracked as energy carrier in IEA free-access TES data",
             # ),
         ]:
+            prod_fields = self._fields_for(prod_var, fuel_cats)
+            imp_fields  = self._fields_for(imp_var,  fuel_cats)
+            exp_fields  = self._fields_for(exp_var,  fuel_cats)
+
+            # Non-tradeable products (HYDRO, WIND, SOLAR, NUCLEAR,
+            # GEOTHERM, BIOWASTE) have no SSP prod/imports/exports fields
+            # since primary renewables are represented via electricity
+            # output rather than as tradeable fuels. Emit a TES row only
+            # when SSP actually carries the fuel.
+            if not (prod_fields or imp_fields or exp_fields):
+                continue
+
+            # Signed sum: prod (+) + imports (+) - exports (-).
+            # Exports are prefixed with `-` in the CSV cell; the reader
+            # (_parse_signed_fields) subtracts them at aggregation time.
+            signed_fields = (
+                list(prod_fields)
+                + list(imp_fields)
+                + [f"-{f}" for f in exp_fields]
+            )
+
             rows.append(self._row(
                 "TES", "Total energy supply",
                 product_code, product_name,
                 "enfu",
-                self._fields_for(prod_var, fuel_cats),
+                signed_fields,
                 agg, "PJ", 1000, quality, notes,
             ))
 
@@ -1067,7 +1097,7 @@ class IEACrosswalkBuilder:
         ##  ASSEMBLE ALL SECTIONS
 
         all_rows: List[Dict[str, Any]] = []
-        all_rows += self._rows_supply()             # (TES, product) -> demand-by-fuel # TODO: Correct computation of TES
+        all_rows += self._rows_supply()             # (TES, product) -> supply by fuel
         all_rows += self._rows_fuel_production()    # (FUELPROD, product) -> prod_enfu_fuel_*
         all_rows += self._rows_imports_exports()
         all_rows += self._rows_electricity_generation()

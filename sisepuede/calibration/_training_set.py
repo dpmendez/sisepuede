@@ -184,21 +184,28 @@ def crosswalk_ssp_columns_for_iea_targets(
             "must be a non-empty list."
         )
 
-    per_row_fields: List[List[str]] = []
-    per_row_conv:   List[float]     = []
+    # Per target row: signed field pairs [(field_name, +1|-1), ...]
+    # so we can represent formulas like TES = prod + imports - exports
+    # in the aggregation matrix.
+    per_row_signed: List[List[Tuple[str, int]]] = []
+    per_row_conv:   List[float]                 = []
     all_fields: set = set()
 
     for bal, prod in iea_target_rows:
         entry = crosswalk.get_crosswalk_entry(bal, prod)
         if entry is None:
-            per_row_fields.append([])
+            per_row_signed.append([])
             per_row_conv.append(1.0)
             continue
-        fields = list(entry.get("ssp_fields") or [])
-        conv   = float(entry.get("unit_conversion_to_tj", 1.0))
-        per_row_fields.append(fields)
+        signed = list(entry.get("ssp_fields_signed") or [])
+        if not signed:
+            # Fallback for older callers that only expose ssp_fields (no
+            # signs); treat every field as +1 (pure sum).
+            signed = [(f, +1) for f in list(entry.get("ssp_fields") or [])]
+        conv = float(entry.get("unit_conversion_to_tj", 1.0))
+        per_row_signed.append(signed)
         per_row_conv.append(conv)
-        all_fields.update(fields)
+        all_fields.update(f for f, _ in signed)
 
     ssp_columns = sorted(all_fields)
     col_idx     = {c: j for j, c in enumerate(ssp_columns)}
@@ -206,10 +213,10 @@ def crosswalk_ssp_columns_for_iea_targets(
     n_iea = len(iea_target_rows)
     n_ssp = len(ssp_columns)
     A = np.zeros((n_iea, n_ssp), dtype=float)
-    for i, (fields, conv) in enumerate(zip(per_row_fields, per_row_conv)):
-        for f in fields:
+    for i, (signed, conv) in enumerate(zip(per_row_signed, per_row_conv)):
+        for f, s in signed:
             if f in col_idx:
-                A[i, col_idx[f]] = conv
+                A[i, col_idx[f]] = s * conv
 
     return ssp_columns, A
 

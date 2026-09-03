@@ -2,16 +2,11 @@ iea_balance_code,iea_balance_name,iea_product_code,iea_product_name,sisepuede_su
 ,,,,,,,,,,
 ,--- ENERGY SUPPLY ---,,,,,,,,,
 ,,,,,,,,,,
-TES,Total energy supply,COAL,Coal,enfu,energy_demand_enfu_total_fuel_coal:energy_demand_enfu_total_fuel_coke,sum,PJ,1000.0,approximate,IEA TES Coal aggregate; includes fuel_coal + fuel_coke; SISEPUEDE does not distinguish hard vs. brown coal
-TES,Total energy supply,NATGAS,Natural gas,enfu,energy_demand_enfu_total_fuel_natural_gas,direct,PJ,1000.0,exact,
-TES,Total energy supply,OIL,Oil,enfu,energy_demand_enfu_total_fuel_crude:energy_demand_enfu_total_fuel_diesel:energy_demand_enfu_total_fuel_gasoline:energy_demand_enfu_total_fuel_hydrocarbon_gas_liquids:energy_demand_enfu_total_fuel_kerosene:energy_demand_enfu_total_fuel_oil,sum,PJ,1000.0,approximate,"IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} and fuel_natural_gas_liquid is the closest analog. NGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES"
-TES,Total energy supply,NUCLEAR,Nuclear,enfu,energy_demand_enfu_total_fuel_nuclear,direct,PJ,1000.0,exact,
-TES,Total energy supply,HYDRO,Hydro,enfu,energy_demand_enfu_total_fuel_water,direct,PJ,1000.0,exact,
-TES,Total energy supply,WINDSOLAR,Wind solar etc.,enfu,energy_demand_enfu_total_fuel_solar:energy_demand_enfu_total_fuel_wind,sum,PJ,1000.0,approximate,IEA aggregates wind+solar+other renewables; sum SISEPUEDE wind and solar
-TES,Total energy supply,BIOWASTE,Biofuels and waste,enfu,energy_demand_enfu_total_fuel_biofuels:energy_demand_enfu_total_fuel_biogas:energy_demand_enfu_total_fuel_biomass:energy_demand_enfu_total_fuel_waste,sum,PJ,1000.0,approximate,IEA aggregates all biofuels and waste; sum SISEPUEDE biomass+solid_biomass+biogas+biofuels+waste
-TES,Total energy supply,GEOTHERM,Geothermal,enfu,energy_demand_enfu_total_fuel_geothermal,direct,PJ,1000.0,exact,
-TES,Total energy supply,ELECTR,Electricity,enfu,energy_demand_enfu_total_fuel_electricity,direct,PJ,1000.0,exact,
-TES,Total energy supply,HYDROGEN,Hydrogen,enfu,energy_demand_enfu_total_fuel_hydrogen,direct,PJ,1000.0,no_match,IEA free-access TES has no hydrogen row; tracked only in premium datasets post-2022
+TES,Total energy supply,COAL,Coal,enfu,prod_enfu_fuel_coal_pj:imports_enfu_fuel_coal_pj:-exportsadj_enfu_fuel_coal,sum,PJ,1000.0,approximate,IEA TES Coal aggregate; includes fuel_coal + fuel_coke; SISEPUEDE does not distinguish hard vs. brown coal
+TES,Total energy supply,NATGAS,Natural gas,enfu,prod_enfu_fuel_natural_gas_pj:imports_enfu_fuel_natural_gas_pj:-exportsadj_enfu_fuel_natural_gas,direct,PJ,1000.0,exact,
+TES,Total energy supply,OIL,Oil,enfu,prod_enfu_fuel_crude_pj:prod_enfu_fuel_diesel_pj:prod_enfu_fuel_gasoline_pj:prod_enfu_fuel_hydrocarbon_gas_liquids_pj:prod_enfu_fuel_kerosene_pj:prod_enfu_fuel_oil_pj:imports_enfu_fuel_crude_pj:imports_enfu_fuel_diesel_pj:imports_enfu_fuel_gasoline_pj:imports_enfu_fuel_hydrocarbon_gas_liquids_pj:imports_enfu_fuel_kerosene_pj:imports_enfu_fuel_oil_pj:-exportsadj_enfu_fuel_crude:-exportsadj_enfu_fuel_diesel:-exportsadj_enfu_fuel_gasoline:-exportsadj_enfu_fuel_hydrocarbon_gas_liquids:-exportsadj_enfu_fuel_kerosene:-exportsadj_enfu_fuel_oil,sum,PJ,1000.0,approximate,"IEA Oil includes crude and NGL; SISEPUEDE sum of fuel_{crude, diesel, ...} and fuel_natural_gas_liquid is the closest analog. NGLs (propane, butane, ethane, etc.) are extracted during natural gas processing and classified under Oil in IEA's TES"
+TES,Total energy supply,ELECTR,Electricity,enfu,prod_enfu_fuel_electricity_pj:imports_enfu_fuel_electricity_pj:-exportsadj_enfu_fuel_electricity,direct,PJ,1000.0,exact,
+TES,Total energy supply,HYDROGEN,Hydrogen,enfu,prod_enfu_fuel_hydrogen_pj:imports_enfu_fuel_hydrogen_pj:-exportsadj_enfu_fuel_hydrogen,direct,PJ,1000.0,no_match,IEA free-access TES has no hydrogen row; tracked only in premium datasets post-2022
 ,,,,,,,,,,
 ,--- INDIGENOUS FUEL PRODUCTION ---,,,,,,,,,
 ,,,,,,,,,,
