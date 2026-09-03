@@ -67,12 +67,15 @@ except ImportError:                                      # pragma: no cover
     lhs_scale = None                                     # sensitivity.py will error first
 
 
-# Default production-side knob families endorsed by the SSP author
-# Data-generation callers can override this, but the default is what
-# v3.0 ships with.
+# Endorsed production-side knob families.
+# Data-generation callers can override this,
+# but the default is what v3.0 ships with.
+
 DEFAULT_KNOB_PREFIX_FILTERS: List[str] = [
     "nemomod_entc_scalar_availability_factor_",
+    "nemomod_entc_residual_capacity_pp_",
     "efficfactor_entc_technology_fuel_use_",
+    "nemomod_enfu_reserve_margin_fuel_electricity",
 ]
 
 DEFAULT_KNOB_BOUNDS: Tuple[float, float] = (0.8, 1.2)
